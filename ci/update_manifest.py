@@ -14,8 +14,8 @@ APKs; the rest from the environment:
     MOD_REVISION      default `git rev-parse HEAD` of this repository (40 lowercase hex)
     MOD_REPOSITORY    default $GITHUB_REPOSITORY, else DEFAULT_REPOSITORY
 A variable that is set must be valid; an empty value is an error, never a fallback to the default.
-Public builds (mod_build > 0) must be tagged toe3-v<versionName>-b<versionCode>-mod-<hex revision>;
-local builds (mod_build 0) must not use that form.
+Public builds (mod_build > 0) must be tagged vMAJOR.MINOR.PATCH, the mod's own semantic version
+(independent of the game version); local builds (mod_build 0) must not use that form.
 
 release checks the signed output set in DIR against the source guard report (the APK file names, the
 base APK, package and version), verifies every APK's signature (one and the same certificate for all,
@@ -58,6 +58,7 @@ MAX_TOTAL_SIZE = 8 << 30
 
 _REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/(?!\.\.?$)[A-Za-z0-9._-]{1,100}")
 _TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SEMANTIC_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _BUILD_NUMBER = re.compile(r"0|[1-9][0-9]{0,9}")
 _APK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,123}\.apk")
@@ -73,9 +74,13 @@ def _bad(msg):
     raise MetadataError(msg)
 
 
-def release_tag(version_name, version_code):
-    """Pattern of a public release tag for this upstream version."""
-    return re.compile(rf"toe3-v{re.escape(version_name)}-b{version_code}-mod-[0-9a-f]{{7,40}}")
+def semantic_version(tag):
+    """(major, minor, patch) of a public release tag vMAJOR.MINOR.PATCH (stable SemVer core without leading
+    zeros, within the tag length limit), else None."""
+    if not (isinstance(tag, str) and _TAG.fullmatch(tag)):
+        return None
+    match = _SEMANTIC_TAG.fullmatch(tag)
+    return tuple(int(part) for part in match.groups()) if match else None
 
 
 def validate_identity(doc, package=None, version_code=None, version_name=None, apks=None) -> dict:
@@ -100,10 +105,10 @@ def validate_identity(doc, package=None, version_code=None, version_name=None, a
     for key, ok in checks:
         if not ok(doc[key]):
             _bad(f"build identity {key} {doc[key]!r} is invalid")
-    public = release_tag(doc["version_name"], doc["version_code"]).fullmatch(doc["tag"]) is not None
+    public = semantic_version(doc["tag"]) is not None
     if public != (doc["mod_build"] > 0):
         _bad(f"build identity tag {doc['tag']!r} does not fit mod_build {doc['mod_build']} "
-             f"(public builds need toe3-v<versionName>-b<versionCode>-mod-<revision>, local builds mod_build 0)")
+             f"(public builds need a vMAJOR.MINOR.PATCH tag, local builds mod_build 0 and another tag)")
     for key, actual in (("package", package), ("version_code", version_code), ("version_name", version_name),
                         ("required_apks", None if apks is None else sorted(apks))):
         if actual is not None and doc[key] != actual:

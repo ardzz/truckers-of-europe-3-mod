@@ -123,7 +123,7 @@ The Android launcher shows **TOE3 Stormline** and a gold-truck **MOD** icon. The
 
 Install an OTA-enabled build manually once using the steps above. After that, open **Updates** in the mod menu: check the latest GitHub Release, download its complete APK set, and request installation. The updater checks file sizes and SHA-256 hashes, rejects older mod builds, and verifies that the downloaded base APK has the installed signing certificate and the build identity declared by the release.
 
-After checking a release, press **Changelog** to read its automatically generated commit-message changes inside the game. This uses the notes already returned by the release API and does not open a browser. **View release** remains a separate optional link. The notes are informational; APK verification uses the signed build identities and hashes, not the release wording.
+After checking a release, press **Changelog** to read its detailed release notes inside the game. The release embeds its version-specific changelog and automatic commit history, rather than linking you away for the actual changes. The dialog uses the notes already returned by the release API and does not open a browser. **View release** remains a separate optional link. Release wording is informational; APK verification uses signed build identities and hashes.
 
 Android always asks for installation confirmation. On Android 8+, it may first ask you to allow installs from this app; return to the game and press Install after granting that permission. No root or separate overlay permission is required, and silent installation is not supported. Save your game before installing because the app will close or restart. Updates download the full split set, not a small native hot patch.
 
@@ -134,6 +134,20 @@ The workflow checks APKPure every day at **02:27 UTC / 09:27 WIB**, on mod or CI
 Before building, CI verifies the original signing certificate, consistent split versions, the required `UnityDataAssetPack`, and the reviewed native-code, metadata and Unity hashes in [`ci/compatibility.json`](ci/compatibility.json). A changed fingerprint requires a reviewed port of the mod. Replacing the hashes alone does not update hook addresses or field offsets.
 
 CI signs with an existing key, uploads all assets to a draft, and publishes only after the uploads finish. Each release includes the APK set, `SHA256SUMS`, a source manifest, a compatibility report and `update.json` for the in-app updater. Every APK carries the same build identity and required split inventory in its signed `assets/toemod/build.json`. A mod build number distinguishes updates even when the upstream game's version code stays the same. Re-running an already published build skips it instead of creating a duplicate.
+
+### Versioning & changelogs
+
+**Stormline uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html), starting at `v0.1.0`.** This is the mod version, not the upstream game version `0.7.64`. A release identifies the mod version, compatible game version and numeric CI build separately.
+
+- Breaking commit headers (`feat!:` or `feat(scope)!:`) or a `BREAKING CHANGE:` footer raise **major**.
+- `feat:` commits raise **minor**; other build-input changes raise **patch**.
+- A new compatible upstream game build with unchanged mod source raises **patch**. The same source and game inputs are skipped; docs-only and promotional-art-only commits do not create releases.
+
+These versions describe the mod's controls, saved-setting contract and updater compatibility. The `0.x` series remains experimental. A game's changed native fingerprint still stops the build for a reviewed port; SemVer does not remove that gate.
+
+Each release's **Changes in this build** section embeds its matching [`CHANGELOG.md`](CHANGELOG.md) entry and commit history. Without a curated entry, CI generates categorized notes from the commits. The subheadings also work in the in-game reader. Historical release tags stay unchanged; newer releases use `vMAJOR.MINOR.PATCH`.
+
+OTA schema 1 stays unchanged: the mod version comes from `tag`, the game version from `version_name` / `version_code`, and update ordering from the increasing `mod_build`. Existing updater-enabled builds can therefore install the semantic-tagged release using the same signing key, without a manual migration.
 
 <details>
 <summary><strong>Configure signing for your own fork</strong></summary>

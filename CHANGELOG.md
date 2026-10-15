@@ -1,8 +1,25 @@
 # Changelog
 
-Notable changes to TOE3 Stormline, newest first. Every GitHub release also lists, automatically, the commits since the previous published release that change the build inputs (`work/mod`, `ci`, the launcher icon and the release workflow), with links to each commit and the full comparison.
+Notable changes to TOE3 Stormline, newest first. Releases embed the matching section below—not just a link—alongside the automatically generated commit history. If a version has no curated entry, CI groups its commit messages into change categories.
 
-Release tags have the form `toe3-v<game version>-b<game build>-mod-<source revision>`. Record a change under **Unreleased** in the same commit as the change. Once CI publishes the release, rename that heading to the release tag. Commits that only edit this file or the promotional artwork do not trigger a new build or update.
+Mod versions use **Semantic Versioning**, starting at `v0.1.0`, independently of the upstream game's version. CI derives the next version from build-input commits: breaking changes raise major, `feat:` raises minor, and other changes raise patch. A compatible upstream-only rebuild raises patch; unchanged inputs are skipped. Numeric `mod_build` remains the OTA ordering counter. Historical `toe3-v…-b…-mod-…` tags stay intact.
+
+## [v0.1.0] - 2026-10-15
+
+### Added
+
+- Independent semantic mod versions in release tags, release titles and the in-game version display. Game versions and CI build numbers remain separate.
+- Automatic major/minor/patch selection from commit messages, with unchanged-build skipping.
+
+### Fixed
+
+- Release pages now include the version's Added, Changed, Fixed and verification notes instead of showing only a commit subject and a link to this file.
+- Changelog subheadings stay inside the section consumed by the in-game reader, so the detailed notes can be read without opening GitHub.
+
+### Compatibility
+
+- OTA keeps schema 1 and its exact fields. Semantic versions are derived from the tag rather than adding a field that older updaters would reject.
+- The package, signing identity, split inventory and numeric rollback checks are unchanged. Historical release tags and APK assets are not rewritten.
 
 ## [toe3-v0.7.64-b193-mod-7f0d995] - 2026-10-15
 
@@ -82,3 +99,4 @@ First published release, for game 0.7.64 (build 193) on arm64-v8a. Source [`2141
 [toe3-v0.7.64-b193-mod-2141bcc]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-2141bcc
 [toe3-v0.7.64-b193-mod-da547e1]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-da547e1
 [toe3-v0.7.64-b193-mod-7f0d995]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-7f0d995
+[v0.1.0]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/v0.1.0

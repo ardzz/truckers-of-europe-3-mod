@@ -580,6 +580,7 @@ public final class Menu {
         t.put("Controls", sState == READY ? sFeatures.size() + " registered, " + countOn(sFeatures) + " on" : "not loaded", TEXT);
         t.put("Mods switch", master ? "ON" : "OFF (controls not applied)", master ? TEXT : ACCENT);
         UpdatePolicy.Identity id = updater.installed();
+        t.put("Mod version", id == null ? "unknown" : id.label(), TEXT);
         t.put("Mod build", id == null ? "unknown" : id.modBuild == 0 ? "local build" : Long.toString(id.modBuild), TEXT);
         t.put("Release tag", id == null ? "unknown" : id.tag, TEXT);
         t.put("Source revision", id == null ? "unknown" : id.revision.substring(0, Math.min(12, id.revision.length())), TEXT);
@@ -1388,12 +1389,8 @@ public final class Menu {
         if (upStatus == null) return;
         Updater.Phase p = updater.phase();
         UpdatePolicy.Identity inst = updater.installed();
-        upInstalled.setText(inst == null ? "Installed: unknown" : "Installed: "
-                + (inst.modBuild == 0 ? "local build" : "build " + inst.modBuild) + " \u00B7 game " + inst.versionName
-                + "\n" + inst.tag);
-        setText(homeBuild, inst == null ? "Installed build unknown"
-                : (inst.modBuild == 0 ? "Local build" : "Build " + inst.modBuild) + " \u00B7 game " + inst.versionName
-                + "\n" + inst.tag);
+        upInstalled.setText(inst == null ? "Installed: unknown" : "Installed: " + versionLines(inst));
+        setText(homeBuild, inst == null ? "Installed build unknown" : "Installed " + versionLines(inst));
 
         boolean progress = updater.showsProgress();
         String msg = updater.message();
@@ -1414,6 +1411,11 @@ public final class Menu {
         show(upChanges, updater.changelog() != null);
         boolean offer = p == Updater.Phase.AVAILABLE || p == Updater.Phase.READY;
         setText(tabs[UPDATES_TAB], offer ? TAB_NAMES[UPDATES_TAB] + " \u2022" : TAB_NAMES[UPDATES_TAB]);
+    }
+
+    /** Label and game version, then the numeric build of a "vX.Y.Z" release or the tag of any other build. */
+    private static String versionLines(UpdatePolicy.Identity id) {
+        return id.label() + " \u00B7 game " + id.versionName + "\n" + (id.modVersion() != null ? "build " + id.modBuild : id.tag);
     }
 
     private void openReleasePage() {
@@ -1438,7 +1440,7 @@ public final class Menu {
         Context dc = b.getContext();
 
         TextView meta = new TextView(dc);
-        meta.setText("Build " + c.release.modBuild + " \u00B7 game " + c.release.versionName + "\n" + c.release.tag
+        meta.setText("Release " + versionLines(c.release)
                 + "\nFrom the GitHub release notes (informational, not part of the signed update).");
         meta.setTextColor(0xFFBDBDBD);
         meta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);

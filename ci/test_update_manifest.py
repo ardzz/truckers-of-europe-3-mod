@@ -17,7 +17,7 @@ REVISION = "0123456789abcdef" * 2 + "01234567"
 MOD_CERT = "ab" * 32
 CI_ENV = {
     "MOD_BUILD_NUMBER": "7",
-    "MOD_RELEASE_TAG": "toe3-v1.0-b10-mod-0123456",
+    "MOD_RELEASE_TAG": "v0.1.0",
     "MOD_REVISION": REVISION,
     "MOD_REPOSITORY": "owner/trucks-mod",
 }
@@ -37,6 +37,21 @@ def rewrite(path, replace=None, remove=()):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_semantic_public_tags_are_independent_of_the_game_version(self):
+        for tag in ("v0.1.0", "v1.10.2"):
+            with self.subTest(tag=tag):
+                try:
+                    doc = um.identity_from_env({**CI_ENV, "MOD_RELEASE_TAG": tag},
+                                               fixture.PKG, 10, "1.0", APK_NAMES)
+                except um.MetadataError as error:
+                    self.fail(f"Valid semantic mod tag rejected: {error}")
+                self.assertEqual(doc["tag"], tag)
+                self.assertEqual(doc["version_name"], "1.0")
+        for tag in ("v01.1.0", "v1.01.0", "v1.0.01", "v1.2", "v1.2.3.4"):
+            with self.subTest(tag=tag), self.assertRaises(um.MetadataError):
+                um.identity_from_env({**CI_ENV, "MOD_RELEASE_TAG": tag},
+                                     fixture.PKG, 10, "1.0", APK_NAMES)
+
     def test_local_defaults_and_explicit_ci_identity(self):
         local = um.identity_from_env({}, fixture.PKG, 10, "1.0", reversed(APK_NAMES), head=lambda: REVISION)
         self.assertEqual(local["mod_build"], 0)
@@ -58,11 +73,16 @@ class IdentityTests(unittest.TestCase):
             "MOD_BUILD_NUMBER": ("", "-1", "1.5", "01", "true", str(um.MAX_BUILD + 1)),
             "MOD_REVISION": ("", "a" * 39, "A" * 40, "z" * 40),
             "MOD_REPOSITORY": ("", "owner", "owner/repo/extra", "../repo", "owner/repo?token=x"),
-            "MOD_RELEASE_TAG": ("", "a/b", ".", "..", "https://example.com/anything", "wrong-version"),
+            "MOD_RELEASE_TAG": ("", "a/b", ".", "..", "https://example.com/anything", "wrong-version",
+                                "toe3-v1.0-b10-mod-0123456", "v1.0.0-rc.1", "v1.0.0+1", "V1.0.0", "1.0.0",
+                                "v0.0." + "1" * 124),
         }.items():
             for value in values:
                 with self.subTest(key=key, value=value), self.assertRaises(um.MetadataError):
                     um.identity_from_env({**CI_ENV, key: value}, fixture.PKG, 10, "1.0", APK_NAMES)
+        with self.assertRaises(um.MetadataError):
+            um.identity_from_env({"MOD_RELEASE_TAG": "v0.1.0"}, fixture.PKG, 10, "1.0", APK_NAMES,
+                                 head=lambda: REVISION)
 
     def test_wrong_schema_types_and_signed_set_are_rejected(self):
         invalid = {

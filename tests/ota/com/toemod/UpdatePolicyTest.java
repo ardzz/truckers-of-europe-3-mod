@@ -23,7 +23,8 @@ import java.util.zip.ZipOutputStream;
 /**
  * Host-side checks of the OTA trust boundaries in {@link UpdatePolicy}: malformed or hostile
  * metadata, rollback, download locations and redirects, checksums, cache corruption, the
- * signed per-APK identity and the bounded plain-text change list taken from release notes.
+ * signed per-APK identity, the move from legacy to semantic release tags and the bounded
+ * plain-text change list taken from release notes.
  * Run by ci/test_ota_client.py; argument: a scratch directory.
  */
 public final class UpdatePolicyTest {
@@ -56,6 +57,7 @@ public final class UpdatePolicyTest {
         manifestChecks();
         decisionChecks();
         githubReleaseChecks();
+        semanticReleaseChecks();
         releaseNotesChecks();
         transportChecks();
         byteChecks(scratch);
@@ -231,6 +233,44 @@ public final class UpdatePolicyTest {
                 Map<String, Object> m = manifest(tag(8), 8, 193);
                 plan(withAssetUrl(github(tag(8), m), BASE, url), m);
             });
+        }
+    }
+
+    // ------------------------------------------------------------------ semantic release tags (unchanged schema)
+
+    private static void semanticReleaseChecks() {
+        check("legacy build 7 moves to v0.1.0 build 8: plan, offer and embedded identity", () -> {
+            Map<String, Object> m = manifest("v0.1.0", 8, 193);
+            UpdatePolicy.Release r = UpdatePolicy.release(m);
+            List<UpdatePolicy.Download> plan = UpdatePolicy.plan(r, UpdatePolicy.githubRelease(github("v0.1.0", m), REPO));
+            eq(3, plan.size());
+            eq(URI.create("https://github.com/" + REPO + "/releases/download/v0.1.0/" + BASE), plan.get(0).url);
+            eq(UpdatePolicy.Verdict.UPDATE, UpdatePolicy.decide(installed(7), CERT, r));
+            UpdatePolicy.requireEmbedded(signed("v0.1.0", 8), r, ASSETS);
+            expectRejected(() -> UpdatePolicy.requireEmbedded(signed(tag(7), 7), r, CONFIG));
+        });
+        rejects("v0.1.0 manifest carrying a mod_version field",
+                () -> UpdatePolicy.release(with(manifest("v0.1.0", 8, 193), "mod_version", "0.1.0")));
+        check("build counter, not the version tag, orders releases", () -> {
+            UpdatePolicy.Identity v010 = installed("v0.1.0", 8);
+            eq(UpdatePolicy.Verdict.UP_TO_DATE, decide(v010, manifest("v0.1.0", 8, 193)));
+            eq(UpdatePolicy.Verdict.UPDATE, decide(v010, manifest("v0.1.1", 9, 193)));
+            eq(UpdatePolicy.Verdict.NOT_NEWER, decide(v010, manifest("v9.0.0", 8, 193)));
+            eq(UpdatePolicy.Verdict.NOT_NEWER, decide(v010, manifest(tag(7), 7, 193)));
+            eq(UpdatePolicy.Verdict.NOT_NEWER, decide(installed(9), manifest("v0.1.0", 8, 193)));
+            eq(UpdatePolicy.Verdict.UPDATE, decide(installed("local-0123456", 0), manifest("v0.1.0", 8, 193)));
+        });
+        check("mod version comes from a published vMAJOR.MINOR.PATCH tag only", () -> {
+            eq("0.1.0", installed("v0.1.0", 8).modVersion());
+            eq("1.10.2", installed("v1.10.2", 9).modVersion());
+            eq(null, installed(7).modVersion()); // game version 0.7.64 inside a legacy tag is not a mod version
+            eq(null, installed("toe3-v0.7.64-b193-mod-7f0d995", 7).modVersion());
+            eq(null, installed("local-0123456", 0).modVersion());
+            eq(null, installed("v0.1.0", 0).modVersion()); // unpublished
+        });
+        for (final String name : new String[] {"v01.1.0", "v1.02.3", "v0.1", "v0.1.0.1", "v0.1.0-rc.1", "0.1.0", "V0.1.0",
+                "v0.7.64-b193"}) {
+            check("tag " + name + " stays a valid identity without a mod version", () -> eq(null, installed(name, 8).modVersion()));
         }
     }
 
@@ -492,7 +532,16 @@ public final class UpdatePolicyTest {
     }
 
     private static UpdatePolicy.Identity installed(int build) throws UpdateException {
-        return UpdatePolicy.identity(identity(tag(build), build, 193), false);
+        return installed(tag(build), build);
+    }
+
+    private static UpdatePolicy.Identity installed(String tag, int build) throws UpdateException {
+        return UpdatePolicy.identity(identity(tag, build, 193), false);
+    }
+
+    /** The identity a published APK carries. */
+    private static UpdatePolicy.Identity signed(String tag, int build) throws UpdateException {
+        return UpdatePolicy.identity(identity(tag, build, 193), true);
     }
 
     private static UpdatePolicy.Verdict decide(UpdatePolicy.Identity installed, Map<String, Object> manifest) throws UpdateException {

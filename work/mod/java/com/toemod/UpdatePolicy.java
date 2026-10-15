@@ -60,6 +60,8 @@ final class UpdatePolicy {
     private static final Pattern PACKAGE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+");
     private static final Pattern ABI = Pattern.compile("[a-z0-9_-]{1,32}");
     private static final Pattern TAG = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,127}");
+    /** Public mod release tag: stable SemVer core "vMAJOR.MINOR.PATCH" without leading zeros. */
+    private static final Pattern MOD_VERSION_TAG = Pattern.compile("v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)");
     private static final Pattern REVISION = Pattern.compile("[0-9a-f]{40}");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern APK_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,123}\\.apk");
@@ -133,6 +135,24 @@ final class UpdatePolicy {
         public int hashCode() {
             return Objects.hash(repository, packageName, abi, tag, modBuild, revision, versionCode, versionName,
                     requiredApks);
+        }
+
+        /**
+         * "MAJOR.MINOR.PATCH" of a published build tagged "vMAJOR.MINOR.PATCH"; null for a local build
+         * and for a legacy tag, whose embedded game version is not a mod version. Display only:
+         * {@link #modBuild} alone orders releases.
+         */
+        String modVersion() {
+            return semantic() ? tag.substring(1) : null;
+        }
+
+        /** Primary display name: the "vMAJOR.MINOR.PATCH" tag, else "build N" (legacy release) or "local build". */
+        String label() {
+            return semantic() ? tag : modBuild == 0 ? "local build" : "build " + modBuild;
+        }
+
+        private boolean semantic() {
+            return modBuild > 0 && MOD_VERSION_TAG.matcher(tag).matches();
         }
     }
 

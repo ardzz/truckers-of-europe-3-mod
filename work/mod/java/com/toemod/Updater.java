@@ -256,7 +256,7 @@ final class Updater {
                         @Override
                         public void run() {
                             refreshInstallPermission();
-                            enter(Phase.READY, "Build " + rel.identity.modBuild + " is downloaded and verified.", false);
+                            enter(Phase.READY, "Update " + describe(rel.identity) + " is downloaded and verified.", false);
                         }
                     });
                 } catch (Throwable t) {
@@ -418,6 +418,12 @@ final class Updater {
         return String.format(Locale.US, "%.1f MB", bytes / 1048576.0);
     }
 
+    /** The label with the game version, plus the numeric build when the label is a "vX.Y.Z" tag. */
+    private static String describe(UpdatePolicy.Identity id) {
+        return id.label() + " (" + (id.modVersion() != null ? "build " + id.modBuild + " \u00B7 " : "") + "game "
+                + id.versionName + ")";
+    }
+
     // ------------------------------------------------------------------ main-thread plumbing
 
     private void ui(Runnable r) {
@@ -452,8 +458,8 @@ final class Updater {
             case UPDATE:
                 release = r.release;
                 plan = r.plan;
-                enter(Phase.AVAILABLE, "Build " + n.modBuild + " (game " + n.versionName + ") is available: "
-                        + mb(r.release.totalSize) + " download.", false);
+                enter(Phase.AVAILABLE, "Update " + describe(n) + " is available: " + mb(r.release.totalSize) + " download.",
+                        false);
                 break;
             case NOT_NEWER:
                 enter(Phase.IDLE, "No newer build: latest release " + n.tag + " is build " + n.modBuild + ".", false);
