@@ -22,8 +22,9 @@ import java.util.zip.ZipOutputStream;
 
 /**
  * Host-side checks of the OTA trust boundaries in {@link UpdatePolicy}: malformed or hostile
- * metadata, rollback, download locations and redirects, checksums, cache corruption and the
- * signed per-APK identity. Run by ci/test_ota_client.py; argument: a scratch directory.
+ * metadata, rollback, download locations and redirects, checksums, cache corruption, the
+ * signed per-APK identity and the bounded plain-text change list taken from release notes.
+ * Run by ci/test_ota_client.py; argument: a scratch directory.
  */
 public final class UpdatePolicyTest {
     private static final String REPO = "ardzz/truckers-of-europe-3-mod";
@@ -55,6 +56,7 @@ public final class UpdatePolicyTest {
         manifestChecks();
         decisionChecks();
         githubReleaseChecks();
+        releaseNotesChecks();
         transportChecks();
         byteChecks(scratch);
         embeddedIdentityChecks(scratch);
@@ -230,6 +232,69 @@ public final class UpdatePolicyTest {
                 plan(withAssetUrl(github(tag(8), m), BASE, url), m);
             });
         }
+    }
+
+    // ------------------------------------------------------------------ release notes (unsigned, display only)
+
+    private static void releaseNotesChecks() {
+        String site = "https://github.com/" + REPO;
+        final String body = "![artwork](" + site + "/hero.webp)\n\nIntro paragraph\n\n### Changes in this build\n\n"
+                + "Commits that change the mod build inputs since [`" + tag(7) + "`](" + site + "/releases/tag/" + tag(7)
+                + ") ([compare](" + site + "/compare/a...b)):\n\n"
+                + "- [`0123456`](" + site + "/commit/" + REV + ") Fix \\*fuel\\* \\_hold\\_ \\[x\\] \\`y\\`\n"
+                + "- [`89abcde`](" + site + "/commit/" + REV + ") Second\u202Echange\u0085here\u0007\n\n"
+                + "Curated release history: [CHANGELOG.md](" + site + "/blob/main/CHANGELOG.md)\n\n"
+                + "### Menu controls\n\n- **Economy:** money\n";
+        check("change list keeps every short hash and message, drops link destinations", () -> {
+            String c = UpdatePolicy.changes(body);
+            yes(c.contains("0123456 Fix *fuel* _hold_ [x] `y`"), "first commit: " + c);
+            yes(c.contains("89abcde Second change here\n"), "second commit: " + c);
+            yes(c.contains(tag(7)), "previous release tag lost: " + c);
+            yes(!c.contains("://") && !c.contains("]("), "link destination kept: " + c);
+            displayOnly(c);
+        });
+        check("change list spans exactly its section", () -> {
+            String c = UpdatePolicy.changes(body);
+            yes(!c.contains("Intro") && !c.contains("artwork"), "text before the heading: " + c);
+            yes(c.contains("CHANGELOG.md") && !c.contains("Menu controls") && !c.contains("Economy"), "section end: " + c);
+        });
+        check("deeper headings stay inside the section, a higher one ends it",
+                () -> eq("Fixes\n\u2022 one\n\n\u2022 two", UpdatePolicy.changes(
+                        "## Release\r\n### Changes in this build ###\r\n#### Fixes\r\n- one\r\n\r\n\r\n* two\r\n\r\n## Assets\r\n- three\r\n")));
+        check("missing or empty change list is absent, not an error", () -> {
+            eq(null, UpdatePolicy.changes(""));
+            eq(null, UpdatePolicy.changes("### Menu controls\n- a\n"));
+            eq(null, UpdatePolicy.changes("###Changes in this build\n- not a heading without a space\n"));
+            eq(null, UpdatePolicy.changes("### Changes in this build\n\n \t\n``\n### Menu controls\n- a\n"));
+        });
+        check("release notes reach the parsed release", () -> {
+            Map<String, Object> m = manifest(tag(8), 8, 193);
+            eq(UpdatePolicy.changes(body), UpdatePolicy.githubRelease(with(github(tag(8), m), "body", body), REPO).changes);
+        });
+        check("release without usable notes still plans its update", () -> {
+            Map<String, Object> m = manifest(tag(8), 8, 193);
+            for (Object notes : new Object[] {null, 42, "no change list here"}) {
+                Map<String, Object> gh = notes == null ? github(tag(8), m) : with(github(tag(8), m), "body", notes);
+                UpdatePolicy.GithubRelease r = UpdatePolicy.githubRelease(gh, REPO);
+                eq(null, r.changes);
+                eq(3, UpdatePolicy.plan(UpdatePolicy.release(m), r).size());
+            }
+        });
+        check("long change list is bounded without splitting a character", () -> {
+            for (int pairs = 1; pairs <= 12; pairs++) { // every alignment of the cut against surrogate pairs
+                StringBuilder b = new StringBuilder("### Changes in this build\n");
+                for (int i = 0; i < 6000; i++) b.append("- ").append(repeat("\uD83D\uDE9A", pairs)).append('\n');
+                String c = UpdatePolicy.changes(b.append("### Menu controls\n").toString());
+                yes(c.length() <= UpdatePolicy.MAX_CHANGES + 2, "length " + c.length());
+                yes(c.endsWith("\n\u2026"), "truncation not marked");
+                displayOnly(c);
+            }
+        });
+        check("overlong line with unbalanced brackets stays bounded", () -> {
+            String c = UpdatePolicy.changes("### Changes in this build\n- " + repeat("[x](", 100_000) + "\n- next\n");
+            yes(c.length() <= UpdatePolicy.MAX_CHANGES + 2, "length " + c.length());
+            yes(c.endsWith("\u2022 next"), "line after the overlong one lost: " + c.substring(Math.max(0, c.length() - 40)));
+        });
     }
 
     // ------------------------------------------------------------------ connections and redirects
@@ -521,6 +586,18 @@ public final class UpdatePolicyTest {
             z.closeEntry();
         }
         return f;
+    }
+
+    /** Only newlines and displayable characters, with every surrogate pair intact. */
+    private static void displayOnly(String s) {
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            boolean control = (c < 0x20 && c != '\n') || (c >= 0x7F && c <= 0x9F) || c == '\u200E' || c == '\u200F'
+                    || (c >= '\u2028' && c <= '\u202E') || (c >= '\u2066' && c <= '\u2069');
+            yes(!control, "control character U+" + Integer.toHexString(c) + " at " + i);
+            if (Character.isHighSurrogate(c)) yes(i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1)), "split pair at " + i);
+            if (Character.isLowSurrogate(c)) yes(i > 0 && Character.isHighSurrogate(s.charAt(i - 1)), "split pair at " + i);
+        }
     }
 
     // ------------------------------------------------------------------ harness

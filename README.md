@@ -14,6 +14,7 @@
 
 <p>
   <a href="https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest"><strong>Download the mod</strong></a>
+  · <a href="#demo">Live demo</a>
   · <a href="#features">Features</a>
   · <a href="#how-it-works">How it works</a>
   · <a href="#in-app-updates">OTA updates</a>
@@ -29,6 +30,30 @@ The menu runs inside the game's activity. **No root or “display over other app
 
 > **Compatibility:** reviewed for game **0.7.64 / build 193**, `arm64-v8a`. Unknown native code fails the build rather than receiving guessed patches. Google Play Games login and cloud saves do not work with the re-signed APK, including through microG.
 
+## Demo
+
+Real captures from an **arm64 Huawei tablet running Android 12**, game **0.7.64**. These show the local pre-release UI build; the changelog dialog shows the published release available at capture time. Images are cropped or proportionally resized only—no controls or values were painted in.
+
+<p><a href="assets/screenshots/world.webp"><img src="assets/screenshots/world.webp" alt="Actual gameplay in rain with the focused World screen reporting Active: Rainy" width="1100"></a></p>
+
+<table>
+  <tr><th>Home & category navigation</th><th>Read-only truck data</th></tr>
+  <tr>
+    <td><a href="assets/screenshots/home.webp"><img src="assets/screenshots/home.webp" alt="Stormline Home with master switch and individual category destinations" width="340"></a></td>
+    <td><a href="assets/screenshots/debug-truck.webp"><img src="assets/screenshots/debug-truck.webp" alt="Live Truck diagnostics showing sample age, speed, fuel, health, dirt and rain state" width="340"></a></td>
+  </tr>
+</table>
+
+<details>
+<summary><strong>Weather diagnostics & in-game changelog</strong></summary>
+
+<p><a href="assets/screenshots/debug-weather.webp"><img src="assets/screenshots/debug-weather.webp" alt="Actual Weather diagnostics: requested and current condition, transition, intensity and rain suppression flags" width="500"></a></p>
+
+<p><a href="assets/screenshots/changelog.webp"><img src="assets/screenshots/changelog.webp" alt="Automatic commit-message changes displayed in a native Stormline dialog without opening GitHub" width="900"></a></p>
+
+</details>
+
+
 ## Features
 
 | Category | Menu controls |
@@ -42,9 +67,13 @@ The menu runs inside the game's activity. **No root or “display over other app
 | Jobs | Remove delivery penalties; income and XP multipliers up to 20×; rewarded-ad actions without the ad |
 | Shopping & travel | Free trucks, parts, interiors, trailers and garages; free ferry, tolls and towing |
 
-The floating panel has per-feature switches, value sliders and weather selection. Collapse it back to the draggable button to keep driving. Settings persist between launches, and the **Mods enabled** master switch disables every feature together.
+The panel separates **Home**, **World**, **Updates** and **Debug** into focused screens. Open one mod category from Home instead of scrolling through every control. Each numeric control has a slider and exact value entry; weather uses a compact choice grid. Collapse the panel back to its draggable button to keep driving. Settings persist between launches, and the **Mods** master switch disables gameplay changes without blocking Updates or the read-only Debug viewer.
 
 Money, gold, wash tickets, level, rain and rain-dirt prevention are enabled by default. Other controls start disabled. Changes follow the game's update ticks or screen refreshes; disabling a control does not undo purchases, rewards or saved progress.
+
+World shows the requested weather beside the actual game state, transition, rain intensity and suppression flags. Debug groups cached observations into **Runtime**, **Weather** and **Truck**: hook and patch failures, sample age, speed, fuel, health, dirt and rain state. Unavailable or stale data is labelled rather than displayed as a valid zero. Sampling runs only while a relevant screen is visible.
+
+Weather changes are accepted on the next sky update, but visual changes still follow the game's fade, ramp and AfterRain drying stages. They can take minutes: the tablet smoke run changed Foggy → Clear → Rainy with one selection and no repeated toggles. World and Debug distinguish an accepted request from the finished weather.
 
 ## How it works
 
@@ -93,6 +122,8 @@ The source tree contains the mod code, not the game's APKs, extracted binaries o
 The Android launcher shows **TOE3 Stormline** and a gold-truck **MOD** icon. The package ID and signing key stay unchanged, so this updates the existing mod instead of creating a separate clone.
 
 Install an OTA-enabled build manually once using the steps above. After that, open **Updates** in the mod menu: check the latest GitHub Release, download its complete APK set, and request installation. The updater checks file sizes and SHA-256 hashes, rejects older mod builds, and verifies that the downloaded base APK has the installed signing certificate and the build identity declared by the release.
+
+After checking a release, press **Changelog** to read its automatically generated commit-message changes inside the game. This uses the notes already returned by the release API and does not open a browser. **View release** remains a separate optional link. The notes are informational; APK verification uses the signed build identities and hashes, not the release wording.
 
 Android always asks for installation confirmation. On Android 8+, it may first ask you to allow installs from this app; return to the game and press Install after granting that permission. No root or separate overlay permission is required, and silent installation is not supported. Save your game before installing because the app will close or restart. Updates download the full split set, not a small native hot patch.
 
@@ -183,7 +214,7 @@ For reverse engineering, extract your own `libil2cpp.so` and `global-metadata.da
 
 ## Verification & limits
 
-The offline suite covers download parsing, redirect boundaries, package identity, signatures, native compatibility and incomplete APK sets, with OTA metadata and update-policy checks alongside them:
+The offline suite covers download parsing, redirect boundaries, package identity, signatures, native compatibility and incomplete APK sets, alongside OTA trust policy, in-game release-note parsing, menu input/status boundaries, native weather steering and concurrent diagnostic snapshots:
 
 ```sh
 python3 -m unittest discover -s ci -p 'test_*.py' -v
@@ -191,7 +222,9 @@ python3 -m unittest discover -s ci -p 'test_*.py' -v
 
 The [end-to-end release run](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677161415) exercised fetching, compatibility checks, compilation, menu injection, signing and public publication. A [manual rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238) verified the existing-release skip path.
 
-The menu and hook startup have been smoke-tested on an arm64 Huawei tablet. **Not every gameplay control has been exercised in play.** Passing CI proves packaging and signing checks, not complete gameplay correctness. Performance, traffic and reward changes need in-game testing before relying on them.
+Device smoke coverage on the Huawei Android 12 tablet includes focused navigation, live Runtime/Weather/Truck readings, missing weather data outside the driving scene, the in-game changelog, collapse/reopen and activity resume. A single Rainy selection during Foggy weather reached actual Rainy without another toggle; the existing fade and ramp took about four minutes. A successful OTA installation was also confirmed on this tablet.
+
+**Not every gameplay control has been exercised in play.** Passing CI proves the listed checks, not complete gameplay correctness. Performance, traffic and reward changes still need broader in-game testing, and newer Android installer paths have not been device-tested.
 
 ## Credits
 

@@ -11,6 +11,7 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#include <atomic>
 
 struct MethodInfo;
 
@@ -33,9 +34,9 @@ struct Feature {
     const char* choices;   // F_CHOICE only, '|' separated; else nullptr
     void (*on_change)(Feature*);  // optional; called after on/value changes (any thread)
 
-    // runtime state — read these from hooks
-    volatile bool on;
-    volatile float value;
+    // Menu writes on the Android UI thread; hooks read on the Unity thread.
+    std::atomic<bool> on;
+    std::atomic<float> value;
 };
 
 void feature_add(Feature* f);

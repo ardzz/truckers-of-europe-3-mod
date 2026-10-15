@@ -27,7 +27,8 @@ import java.util.zip.ZipFile;
 /**
  * Platform-independent OTA trust policy: validates the signed build identity, the public
  * {@code update.json} and the GitHub release listing, decides whether a release is an update,
- * and enforces download locations, sizes and SHA-256 digests.
+ * and enforces download locations, sizes and SHA-256 digests. It also reduces the release's
+ * unsigned "Changes in this build" notes to bounded plain text for display.
  *
  * <p>JSON arrives already parsed into Map / List / String / Integer / Long / Double / Boolean.
  * No Android classes are used here, so the whole policy runs on a plain JVM.
@@ -46,6 +47,14 @@ final class UpdatePolicy {
     static final int MAX_APKS = 16;
     static final long MAX_APK_SIZE = 4L << 30;
     static final long MAX_TOTAL_SIZE = 8L << 30;
+    /** Display bound of the extracted change list, in chars; longer lists end in an ellipsis line. */
+    static final int MAX_CHANGES = 16 * 1024;
+    private static final int MAX_CHANGES_SOURCE = 64 * 1024;
+    private static final int MAX_NOTE_LINE = 2048;
+    private static final int MAX_LINK_TEXT = 256;
+    private static final int MAX_LINK_DEST = 2048;
+    private static final String CHANGES_HEADING = "Changes in this build";
+    private static final Pattern LINE_BREAK = Pattern.compile("\r\n|\r|\n");
 
     private static final Pattern REPOSITORY = Pattern.compile("[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}");
     private static final Pattern PACKAGE = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+");
@@ -183,11 +192,14 @@ final class UpdatePolicy {
     static final class GithubRelease {
         final String repository;
         final String tag;
+        /** {@link UpdatePolicy#changes(String)} of the release body, or null. Unsigned prose: shown, never trusted. */
+        final String changes;
         private final Map<String, Map<?, ?>> uploaded;
 
-        GithubRelease(String repository, String tag, Map<String, Map<?, ?>> uploaded) {
+        GithubRelease(String repository, String tag, String changes, Map<String, Map<?, ?>> uploaded) {
             this.repository = repository;
             this.tag = tag;
+            this.changes = changes;
             this.uploaded = uploaded;
         }
 
@@ -277,7 +289,8 @@ final class UpdatePolicy {
             if (!seen.add(name)) throw new UpdateException(what + " " + tag + " lists asset " + name + " twice");
             if ("uploaded".equals(m.get("state"))) uploaded.put(name, m);
         }
-        return new GithubRelease(repository, tag, uploaded);
+        Object body = json.get("body");
+        return new GithubRelease(repository, tag, body instanceof String ? changes((String) body) : null, uploaded);
     }
 
     /** Pairs every APK of {@code r} with its release asset; sizes must agree with update.json. */
@@ -395,6 +408,162 @@ final class UpdatePolicy {
     private static String shorten(Object v) {
         String s = v instanceof String ? "\"" + v + "\"" : String.valueOf(v);
         return s.length() <= 48 ? s : s.substring(0, 45) + "...";
+    }
+
+    // ------------------------------------------------------------------ release notes
+
+    /**
+     * The "Changes in this build" section of a release body, from its ATX heading to the next
+     * heading of the same or a higher level, as plain text: link and image destinations, code
+     * backticks, heading markers and Markdown escapes removed, list bullets shown as "\u2022",
+     * control and bidirectional-override characters replaced by spaces, blank-line runs collapsed
+     * and the result bounded by {@link #MAX_CHANGES}. Null when the section is missing or empty;
+     * never throws, because missing release prose must not block an update.
+     */
+    static String changes(String body) {
+        StringBuilder out = new StringBuilder();
+        int level = 0;
+        int scanned = 0;
+        boolean gap = false;
+        boolean cut = false;
+        for (String line : LINE_BREAK.split(body, -1)) {
+            int h = headingLevel(line);
+            if (level == 0) {
+                if (h > 0 && headingText(line).equalsIgnoreCase(CHANGES_HEADING)) level = h;
+                continue;
+            }
+            if (h > 0 && h <= level) break;
+            if (scanned >= MAX_CHANGES_SOURCE || out.length() > MAX_CHANGES) {
+                cut = true;
+                break;
+            }
+            boolean longLine = line.length() > MAX_NOTE_LINE;
+            String src = longLine ? line.substring(0, MAX_NOTE_LINE) : line;
+            scanned += src.length() + 1;
+            int start = out.length();
+            if (start > 0) out.append(gap ? "\n\n" : "\n");
+            int text = out.length();
+            if (h > 0) {
+                String heading = headingText(src);
+                inline(heading, 0, heading.length(), out);
+            } else {
+                plainLine(src, out);
+            }
+            if (longLine) out.append('\u2026');
+            while (out.length() > text && out.charAt(out.length() - 1) == ' ') out.setLength(out.length() - 1);
+            if (out.length() == text) {
+                out.setLength(start);
+                gap = start > 0;
+            } else {
+                gap = false;
+            }
+        }
+        if (cut || out.length() > MAX_CHANGES) {
+            int n = Math.min(out.length(), MAX_CHANGES);
+            if (n > 0 && Character.isHighSurrogate(out.charAt(n - 1))) n--;
+            out.setLength(n);
+            while (out.length() > 0 && Character.isWhitespace(out.charAt(out.length() - 1))) out.setLength(out.length() - 1);
+            if (out.length() > 0) out.append("\n\u2026");
+        }
+        return out.length() == 0 ? null : out.toString();
+    }
+
+    /** Level 1-6 of an ATX heading line ("## Title"), else 0. */
+    private static int headingLevel(String line) {
+        int i = 0;
+        while (i < 3 && i < line.length() && line.charAt(i) == ' ') i++;
+        int hashes = 0;
+        while (i < line.length() && line.charAt(i) == '#') {
+            i++;
+            hashes++;
+        }
+        if (hashes < 1 || hashes > 6) return 0;
+        return i == line.length() || line.charAt(i) == ' ' || line.charAt(i) == '\t' ? hashes : 0;
+    }
+
+    /** Text of an ATX heading line without its opening and optional closing "#" run. */
+    private static String headingText(String line) {
+        String s = line.trim();
+        int i = 0;
+        while (i < s.length() && s.charAt(i) == '#') i++;
+        s = s.substring(i).trim();
+        int end = s.length();
+        while (end > 0 && s.charAt(end - 1) == '#') end--;
+        if (end == 0 || s.charAt(end - 1) == ' ' || s.charAt(end - 1) == '\t') s = s.substring(0, end);
+        return s.trim();
+    }
+
+    /** One body line: indentation kept (at most 8 columns), "-", "*" or "+" list markers as bullets. */
+    private static void plainLine(String line, StringBuilder out) {
+        int i = 0;
+        int indent = 0;
+        while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) {
+            indent += line.charAt(i) == '\t' ? 4 : 1;
+            i++;
+        }
+        if (i == line.length()) return;
+        for (int k = Math.min(indent, 8); k > 0; k--) out.append(' ');
+        char c = line.charAt(i);
+        if ((c == '-' || c == '*' || c == '+') && i + 1 < line.length()
+                && (line.charAt(i + 1) == ' ' || line.charAt(i + 1) == '\t')) {
+            out.append("\u2022 ");
+            i += 2;
+            while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) i++;
+        }
+        inline(line, i, line.length(), out);
+    }
+
+    /** Inline Markdown of s[from, to) as plain text; links and images keep only their text. */
+    private static void inline(String s, int from, int to, StringBuilder out) {
+        for (int i = from; i < to; i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < to && isAsciiPunctuation(s.charAt(i + 1))) {
+                out.append(s.charAt(++i));
+            } else if (c == '[' || (c == '!' && i + 1 < to && s.charAt(i + 1) == '[')) {
+                int end = link(s, c == '!' ? i + 1 : i, to, out);
+                if (end < 0) out.append(c);
+                else i = end - 1;
+            } else if (c != '`') {
+                out.append(displayable(c) ? c : ' ');
+            }
+        }
+    }
+
+    /** Renders the text of a link "[text](destination)" opening at s[open]; its end, or -1 if none. */
+    private static int link(String s, int open, int to, StringBuilder out) {
+        int close = match(s, open + 1, Math.min(to, open + 1 + MAX_LINK_TEXT), '[', ']');
+        if (close < 0 || close + 1 >= to || s.charAt(close + 1) != '(') return -1;
+        int end = match(s, close + 2, Math.min(to, close + 2 + MAX_LINK_DEST), '(', ')');
+        if (end < 0) return -1;
+        inline(s, open + 1, close, out);
+        return end + 1;
+    }
+
+    /** Index of the {@code closer} balancing an already opened bracket within s[from, limit), or -1. */
+    private static int match(String s, int from, int limit, char opener, char closer) {
+        int depth = 0;
+        for (int i = from; i < limit; i++) {
+            char c = s.charAt(i);
+            if (c == '\\') {
+                i++;
+            } else if (c == opener) {
+                depth++;
+            } else if (c == closer) {
+                if (depth == 0) return i;
+                depth--;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isAsciiPunctuation(char c) {
+        return (c >= '!' && c <= '/') || (c >= ':' && c <= '@') || (c >= '[' && c <= '`') || (c >= '{' && c <= '~');
+    }
+
+    /** False for C0/C1 controls, line/paragraph separators and bidirectional marks and overrides. */
+    private static boolean displayable(char c) {
+        return c >= 0x20 && !(c >= 0x7F && c <= 0x9F) && c != '\u200E' && c != '\u200F' && c != '\u2028' && c != '\u2029'
+                && !(c >= '\u202A' && c <= '\u202E') && !(c >= '\u2066' && c <= '\u2069');
     }
 
     // ------------------------------------------------------------------ locations

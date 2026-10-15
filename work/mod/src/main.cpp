@@ -1,6 +1,7 @@
 // Native core: libil2cpp discovery, inline hooks, toggleable byte patches,
 // feature registry and the JNI bridge used by com.toemod.Menu.
 #include "mod.h"
+#include "debug.h"
 #include "../third_party/And64InlineHook.hpp"
 
 #include <android/log.h>
@@ -43,6 +44,9 @@ void feature_add(Feature* f) {
 void install_add(void (*fn)()) { installers().push_back(fn); }
 
 static std::atomic<bool> g_ready{false};
+static std::atomic<unsigned> g_hooks_installed{0};
+static std::atomic<unsigned> g_hooks_failed{0};
+static std::atomic<unsigned> g_patches_failed{0};
 
 // ---------------------------------------------------------------- memory
 static uintptr_t g_base = 0;
@@ -79,6 +83,7 @@ bool hook(uintptr_t vaddr, void* replacement, void** orig) {
     A64HookFunction(target, replacement, &tramp);
     if (orig) *orig = tramp;
     bool ok = tramp != nullptr;
+    (ok ? g_hooks_installed : g_hooks_failed).fetch_add(1, std::memory_order_relaxed);
     mlog("hook 0x%lx -> %s", (unsigned long)vaddr, ok ? "ok" : "FAILED");
     return ok;
 }
@@ -98,6 +103,7 @@ bool patch_apply(const BytePatch& p, bool enable) {
     auto orig = unhex(p.orig_hex), pat = unhex(p.patch_hex);
     if (orig.size() != pat.size() || orig.empty()) {
         mlog("patch 0x%lx: bad hex", (unsigned long)p.vaddr);
+        g_patches_failed.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     pthread_mutex_lock(&g_patch_mx);
@@ -115,6 +121,7 @@ bool patch_apply(const BytePatch& p, bool enable) {
         ok = true;
     }
     pthread_mutex_unlock(&g_patch_mx);
+    if (!ok) g_patches_failed.fetch_add(1, std::memory_order_relaxed);
     mlog("patch 0x%lx %s -> %s", (unsigned long)p.vaddr, enable ? "on" : "off", ok ? "ok" : "FAILED");
     return ok;
 }
@@ -188,6 +195,20 @@ static void jni_set(JNIEnv* env, jclass, jstring jid, jboolean on, jfloat value)
 
 static jboolean jni_ready(JNIEnv*, jclass) { return g_ready ? JNI_TRUE : JNI_FALSE; }
 
+static void jni_debug_snapshot(JNIEnv* env, jclass, jdoubleArray values) {
+    if (!values || env->GetArrayLength(values) < DEBUG_VALUES) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "A 32-value diagnostic buffer is required");
+        return;
+    }
+    double sample[DEBUG_VALUES];
+    debug_snapshot(sample);
+    sample[0] = g_ready.load() ? 1.0 : 0.0;
+    sample[1] = g_hooks_installed.load(std::memory_order_relaxed);
+    sample[2] = g_hooks_failed.load(std::memory_order_relaxed);
+    sample[3] = g_patches_failed.load(std::memory_order_relaxed);
+    env->SetDoubleArrayRegion(values, 0, DEBUG_VALUES, sample);
+}
+
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
@@ -197,6 +218,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
         {"features", "()Ljava/lang/String;", (void*)jni_features},
         {"set", "(Ljava/lang/String;ZF)V", (void*)jni_set},
         {"ready", "()Z", (void*)jni_ready},
+        {"debugSnapshot", "([D)V", (void*)jni_debug_snapshot},
     };
     if (env->RegisterNatives(cls, methods, sizeof methods / sizeof methods[0]) != 0) return JNI_ERR;
     pthread_t t;

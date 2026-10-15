@@ -1,22 +1,26 @@
 // World: forced weather, time-of-day freeze / clock hour, AI traffic count.
 //
-// Weather (SkyValues, one instance per game scene)
-//   currentWeather 0x310 / nextWeather 0x314 (Condition: Clear 0, Rainy 1,
-//   Cloudy 2, Foggy 3, AfterRain 4), nextWeatherTime 0x318 (1 tick = 1 s),
-//   weatherIntensity 0x31C (ramp target), weatherChangeSpeed 0x320,
-//   weatherChancing 0x30C, rain/mist/cloud intensity 0x178/0x17C/0x180.
-//   <UpdateValues>d__151::MoveNext (0x1b7cae8) calls UpdateSkyValues each tick,
-//   decrements nextWeatherTime and sets weatherChancing once it reaches 0.
-//   UpdateSkyValues (0x1b74714) then ramps the intensity of nextWeather
-//   (switch at 0x1b748fc) and, once reached, sets currentWeather and calls
-//   SetNextWeather (0x1b7756c). Vanilla SetNextWeather alternates
-//   Clear -> random -> Clear and rolls per-type timer/intensity/speed.
-//   Rain -> Clear goes through nextWeather = AfterRain (drying) first.
-//   Hook SetNextWeather (after orig) to re-plan toward the chosen weather; a
-//   different non-clear weather first fades out through Clear so no stale
-//   rain/mist/cloud intensity is left behind. Hook UpdateSkyValues (before
-//   orig, main thread) to apply menu changes while no transition is running,
-//   and to re-trigger the ramp when something zeroed the intensity (Sleep).
+// Weather (SkyValues, one instance per game scene; state machine and steering in weather_policy.h)
+//   weatherChancing 0x30C, currentWeather 0x310 / nextWeather 0x314 (Clear 0, Rainy 1, Cloudy 2,
+//   Foggy 3, AfterRain 4), nextWeatherTime 0x318, weatherIntensity 0x31C (ramp target),
+//   weatherChangeSpeed 0x320, rain/mist/cloud intensity 0x178/0x17C/0x180, _stopRainArea 0x248,
+//   noRainArea 0x33C, hour 0x28 (TOD_Sky.Cycle.Hour copied at 0x1b74e0c), controller 0x168.
+//   <UpdateValues>d__151::MoveNext (0x1b7cae8) calls UpdateSkyValues (0x1b74714), whose switch at
+//   0x1b748fc runs only while weatherChancing; every finished ramp calls SetNextWeather (0x1b7756c).
+//   Root cause of "takes several switches": the old hooks applied a menu change only while
+//   weatherChancing was false (UpdateSkyValues) or at the next SetNextWeather, i.e. after the
+//   running transition completed. Ramps take tens of seconds and Rainy -> Clear adds AfterRain
+//   drying (nextWeatherTime 60, idle until <= 30, then drying), so a choice made during any
+//   transition - including the one toward the previous choice - first watched the scene finish
+//   going the wrong way and only then reversed, 1-3 minutes without a visible reaction. In
+//   addition h_SetNextWeather re-read the choice before storing the generation, so a change landing
+//   between the two reads was marked applied without being planned.
+//   Fix: weather::steer() runs on the Unity main thread before every original UpdateSkyValues and
+//   after every SetNextWeather and redirects the running machine to the latest choice (idle: start
+//   within 1 s; changing: fade a partly ramped weather through Clear, ramp a fading/drying weather
+//   back to its own target, otherwise let Clear fades and AfterRain drying finish; held weather:
+//   180 s re-check, Sleep re-ramp). Intensities and wetness are never written. Off: steer() is not
+//   called and vanilla SetNextWeather takes over at the next re-check.
 //
 // Time of day (TOD_Time component)
 //   FixedUpdate (0x1a05d40): if (ProgressTime && DayLengthInMinutes > 0)
@@ -36,6 +40,8 @@
 //   SetIntensity and despawn excess active cars with TrafficCar::ResetCar
 //   (0x198a6dc, what GarageManager uses). Prefs are never written.
 #include "mod.h"
+#include "debug.h"
+#include "weather_policy.h"
 
 #include <atomic>
 #include <ctime>
@@ -52,16 +58,35 @@ FEATURE(f_time_hour, "time_hour", "World", "Set clock hour", F_TOGGLE_FLOAT, fal
 FEATURE(f_traffic, "traffic", "World", "AI traffic count", F_TOGGLE_INT, false, 30, 0, 200, nullptr, nullptr);
 
 // ---------------------------------------------------------------- weather
-enum { W_CLEAR = 0, W_RAINY = 1, W_CLOUDY = 2, W_FOGGY = 3 };
-
 static constexpr uintptr_t kSetNextWeather = 0x1b7756c;
 static constexpr uintptr_t kUpdateSkyValues = 0x1b74714;
 
-static constexpr int kChangeTicks = 3;    // seconds until a needed transition starts
-static constexpr int kSteadyTicks = 180;  // re-check period while already at the target
+enum : uintptr_t {
+    kSkyHour = 0x28,
+    kSkyController = 0x168,
+    kSkyRain = 0x178,
+    kSkyMist = 0x17C,
+    kSkyCloud = 0x180,
+    kSkyStopRainArea = 0x248,
+    kSkyChancing = 0x30C,
+    kSkyCurrent = 0x310,
+    kSkyNext = 0x314,
+    kSkyTimer = 0x318,
+    kSkyIntensity = 0x31C,
+    kSkySpeed = 0x320,
+    kSkyNoRainArea = 0x33C,
+};
 
-static std::atomic<int> g_weather_gen{1};  // bumped on every menu change
-static int g_weather_applied = 0;           // main thread only
+// Bumped by every menu change on the UI thread, after the feature's on/value stores.
+static std::atomic<unsigned> g_weather_request{0};
+
+struct WeatherControl {  // Unity main thread only
+    void* sky = nullptr;       // SkyValues instance `memory` belongs to (compared, never dereferenced)
+    weather::Memory memory{};
+    unsigned applied = 0;      // request generation the controller last acted on
+    unsigned transitions = 0;  // transitions it started or redirected
+};
+static WeatherControl g_wx;
 
 static uint32_t g_rng = 0x9e3779b9u;
 static uint32_t rng_next() {
@@ -73,72 +98,91 @@ static uint32_t rng_next() {
 static float rng_range(float lo, float hi) { return lo + (hi - lo) * (float)(rng_next() >> 8) * (1.0f / 16777216.0f); }
 static int rng_range(int lo, int hi_excl) { return lo + (int)(rng_next() % (uint32_t)(hi_excl - lo)); }
 
+// Same ranges as the vanilla per-type tail of SetNextWeather.
+static float roll_intensity(int w) {
+    return w == weather::kRainy ? rng_range(0.6f, 1.0f) : w == weather::kCloudy ? rng_range(0.4f, 1.0f)
+                                                                                 : rng_range(0.2f, 1.0f);
+}
+static float roll_speed(int w) {
+    return (float)(w == weather::kRainy ? rng_range(10, 15) : w == weather::kCloudy ? rng_range(4, 10)
+                                                                                     : rng_range(5, 10));
+}
+static constexpr weather::Roll kWeatherRoll{roll_intensity, roll_speed};
+
 static int weather_choice() {
     int c = (int)(f_weather.value + 0.5f);
-    return c < W_CLEAR ? W_CLEAR : c > W_FOGGY ? W_FOGGY : c;
+    return c < weather::kClear ? weather::kClear : c > weather::kFoggy ? weather::kFoggy : c;
 }
 
-static void weather_changed(Feature*) { g_weather_gen.fetch_add(1); }
+static void weather_changed(Feature*) { g_weather_request.fetch_add(1); }
 
-// Point nextWeather/timer/intensity of SkyValues `sv` at the chosen weather.
-static void weather_plan(void* sv) {
-    int c = weather_choice();
-    int cur = FIELD(int, sv, 0x310);
-    int target = (c == W_CLEAR || cur == W_CLEAR || cur == c) ? c : W_CLEAR;
-    FIELD(int, sv, 0x314) = target;
-    if (target == cur) {  // already there: keep intensity, re-check later
-        FIELD(int, sv, 0x318) = kSteadyTicks;
-        return;
+// Steer SkyValues `sv` toward the latest menu choice (Unity main thread).
+static void weather_control(void* sv) {
+    if (sv != g_wx.sky) {  // new scene instance
+        g_wx.sky = sv;
+        g_wx.memory = {};
     }
-    FIELD(int, sv, 0x318) = kChangeTicks;
-    // Same ranges as the vanilla per-type tail of SetNextWeather.
-    switch (target) {
-        case W_RAINY:
-            FIELD(float, sv, 0x31C) = rng_range(0.6f, 1.0f);
-            FIELD(float, sv, 0x320) = (float)rng_range(10, 15);
-            break;
-        case W_CLOUDY:
-            FIELD(float, sv, 0x320) = (float)rng_range(4, 10);
-            FIELD(float, sv, 0x31C) = rng_range(0.4f, 1.0f);
-            break;
-        case W_FOGGY:
-            FIELD(float, sv, 0x320) = (float)rng_range(5, 10);
-            FIELD(float, sv, 0x31C) = rng_range(0.2f, 1.0f);
-            break;
-        default:  // clear: fade the current weather out at its own intensity scale
-            FIELD(float, sv, 0x320) = (float)rng_range(5, 10);
-            break;
+    // Load the generation first: the on/value read below are at least that request's.
+    unsigned gen = g_weather_request.load(std::memory_order_acquire);
+    if (f_weather.on) {
+        weather::Sky s;
+        s.changing = FIELD(bool, sv, kSkyChancing);
+        s.stopRain = FIELD(bool, sv, kSkyStopRainArea);
+        s.current = FIELD(int, sv, kSkyCurrent);
+        s.next = FIELD(int, sv, kSkyNext);
+        s.timer = FIELD(int, sv, kSkyTimer);
+        s.target = FIELD(float, sv, kSkyIntensity);
+        s.speed = FIELD(float, sv, kSkySpeed);
+        s.rain = FIELD(float, sv, kSkyRain);
+        s.cloud = FIELD(float, sv, kSkyCloud);
+        s.mist = FIELD(float, sv, kSkyMist);
+        weather::Step st = weather::steer(s, g_wx.memory, weather_choice(), kWeatherRoll);
+        if (st != weather::kNone) {
+            FIELD(int, sv, kSkyCurrent) = s.current;
+            FIELD(int, sv, kSkyNext) = s.next;
+            FIELD(int, sv, kSkyTimer) = s.timer;
+            FIELD(float, sv, kSkyIntensity) = s.target;
+            FIELD(float, sv, kSkySpeed) = s.speed;
+            if (weather::counts(st)) ++g_wx.transitions;
+        }
     }
+    g_wx.applied = gen;
+}
+
+// Copy the actual SkyValues state for the Debug/World screens (after the original update).
+static void weather_sample(void* sv) {
+    WeatherDebugSample d;
+    d.requestGeneration = (int)g_weather_request.load(std::memory_order_acquire);
+    d.enabled = f_weather.on;
+    d.requested = weather_choice();
+    d.current = FIELD(int, sv, kSkyCurrent);
+    d.next = FIELD(int, sv, kSkyNext);
+    d.timer = FIELD(int, sv, kSkyTimer);
+    d.transitioning = FIELD(bool, sv, kSkyChancing);
+    d.rain = FIELD(float, sv, kSkyRain);
+    d.cloud = FIELD(float, sv, kSkyCloud);
+    d.mist = FIELD(float, sv, kSkyMist);
+    d.target = FIELD(float, sv, kSkyIntensity);
+    d.noRainArea = FIELD(bool, sv, kSkyNoRainArea);
+    d.stopRainArea = FIELD(bool, sv, kSkyStopRainArea);
+    d.hour = FIELD(float, sv, kSkyHour);
+    d.appliedGeneration = (int)g_wx.applied;
+    d.appliedCount = g_wx.transitions;
+    debug_weather_sample(d);
+    debug_player_truck(FIELD(void*, sv, kSkyController));
 }
 
 static void (*o_SetNextWeather)(void*, const MethodInfo*);
 static void h_SetNextWeather(void* sv, const MethodInfo* mi) {
-    o_SetNextWeather(sv, mi);  // keeps vanilla bookkeeping (weatherChancing = false, ...)
-    if (!sv || !f_weather.on) return;
-    weather_plan(sv);
-    g_weather_applied = g_weather_gen.load();
+    o_SetNextWeather(sv, mi);  // vanilla pick, weatherChancing = false
+    if (sv) weather_control(sv);
 }
 
 static void (*o_UpdateSkyValues)(void*, const MethodInfo*);
 static void h_UpdateSkyValues(void* sv, const MethodInfo* mi) {
-    if (sv && !FIELD(bool, sv, 0x30C)) {  // no transition in progress
-        int gen = g_weather_gen.load();
-        if (gen != g_weather_applied) {
-            g_weather_applied = gen;
-            if (f_weather.on) weather_plan(sv);  // off: vanilla resumes at the next SetNextWeather
-        } else if (f_weather.on) {
-            // At the target but its intensity was zeroed (Sleep::Update sets rainIntensity = 0):
-            // start the ramp back up soon instead of after the steady period.
-            int c = weather_choice();
-            if (c != W_CLEAR && FIELD(int, sv, 0x310) == c && FIELD(int, sv, 0x314) == c) {
-                float cur = c == W_RAINY ? FIELD(float, sv, 0x178) : c == W_FOGGY ? FIELD(float, sv, 0x17C)
-                                                                                 : FIELD(float, sv, 0x180);
-                if (cur + 0.05f < 0.5f * FIELD(float, sv, 0x31C) && FIELD(int, sv, 0x318) > kChangeTicks)
-                    FIELD(int, sv, 0x318) = kChangeTicks;
-            }
-        }
-    }
+    if (sv) weather_control(sv);
     o_UpdateSkyValues(sv, mi);
+    if (sv) weather_sample(sv);
 }
 
 // ---------------------------------------------------------------- time of day

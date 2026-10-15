@@ -63,6 +63,17 @@ final class Updater {
         void onUpdaterChanged();
     }
 
+    /** The release found by the latest successful check and its "Changes in this build" text (null if none). */
+    static final class Changelog {
+        final UpdatePolicy.Identity release;
+        final String changes;
+
+        Changelog(UpdatePolicy.Identity release, String changes) {
+            this.release = release;
+            this.changes = changes;
+        }
+    }
+
     static final String ACTION_INSTALL_STATUS = "com.toemod.action.INSTALL_STATUS";
 
     private static final String TAG = Menu.TAG;
@@ -103,6 +114,7 @@ final class Updater {
     private String installedCert;
     private UpdatePolicy.Release release;
     private List<UpdatePolicy.Download> plan;
+    private Changelog changelog;
     private long progressDone;
     private long progressTotal;
     private int sessionId = -1;
@@ -145,6 +157,11 @@ final class Updater {
     /** The release being offered, downloaded or installed; null otherwise. */
     UpdatePolicy.Release release() {
         return release;
+    }
+
+    /** Notes of the latest successfully checked release; null before a check succeeds. */
+    Changelog changelog() {
+        return changelog;
     }
 
     boolean showsProgress() {
@@ -195,6 +212,7 @@ final class Updater {
         final String cert = installedCert;
         release = null;
         plan = null;
+        changelog = null;
         enter(Phase.CHECKING, "Checking GitHub for the latest release\u2026", false);
         worker.execute(new Runnable() {
             @Override
@@ -429,6 +447,7 @@ final class Updater {
 
     private void onChecked(CheckResult r) {
         UpdatePolicy.Identity n = r.release.identity;
+        changelog = new Changelog(n, r.changes);
         switch (r.verdict) {
             case UPDATE:
                 release = r.release;
@@ -451,11 +470,14 @@ final class Updater {
         final UpdatePolicy.Verdict verdict;
         final UpdatePolicy.Release release;
         final List<UpdatePolicy.Download> plan;
+        final String changes;
 
-        CheckResult(UpdatePolicy.Verdict verdict, UpdatePolicy.Release release, List<UpdatePolicy.Download> plan) {
+        CheckResult(UpdatePolicy.Verdict verdict, UpdatePolicy.Release release, List<UpdatePolicy.Download> plan,
+                String changes) {
             this.verdict = verdict;
             this.release = release;
             this.plan = plan;
+            this.changes = changes;
         }
     }
 
@@ -574,7 +596,7 @@ final class Updater {
         List<UpdatePolicy.Download> downloads = UpdatePolicy.plan(rel, gh);
         UpdatePolicy.Verdict verdict = UpdatePolicy.decide(inst, cert, rel);
         pruneCache(verdict == UpdatePolicy.Verdict.UPDATE ? rel.identity.tag : null);
-        return new CheckResult(verdict, rel, downloads);
+        return new CheckResult(verdict, rel, downloads, gh.changes);
     }
 
     /**

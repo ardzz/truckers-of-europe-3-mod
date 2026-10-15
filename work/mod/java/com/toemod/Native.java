@@ -15,4 +15,7 @@ public final class Native {
 
     /** True once the il2cpp hooks are installed; {@link #set} must not be called before. */
     public static native boolean ready();
+
+    /** Fills a reusable 32-value buffer with cached diagnostics; NaN means no sample. */
+    public static native void debugSnapshot(double[] values);
 }

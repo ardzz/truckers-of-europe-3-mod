@@ -6,6 +6,29 @@ Release tags have the form `toe3-v<game version>-b<game build>-mod-<source revis
 
 ## Unreleased
 
+### Added
+
+- Focused Home, mod-category, World, Updates and Debug screens instead of one long accordion.
+- Read-only Runtime, Weather and Truck diagnostics with explicit unavailable/stale states and sample ages.
+- A Changelog dialog inside the menu, using the automatic commit-message notes already fetched by the update check.
+- Exact numeric value entry alongside sliders, with visible range validation.
+- Real Huawei tablet screenshots and a README demo gallery, separate from the promotional artwork.
+
+### Fixed
+
+- Weather status no longer claims the requested rain is active while its intensity is still being restored.
+- Weather requests now steer the running game transition on the next sky update instead of waiting for the previous choice to finish first. Existing fade and AfterRain drying stages still control the visible effects.
+- A rain request suppressed by a StopRain area is reported as suppressed even after the game settles to Clear.
+
+### Verified
+
+- Focused screens, live Runtime/Weather/Truck readings, the in-game release changelog, collapse/reopen and activity resume on the Huawei Android 12 tablet.
+- One Rainy selection during Foggy weather reached Rainy without another toggle; the game's fade through Clear and ramp took about four minutes.
+
+## [toe3-v0.7.64-b193-mod-da547e1] - 2026-10-15
+
+Game 0.7.64 (build 193), mod build 6. Source [`da547e1`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/da547e154c38693de033e2a809725a68e48f1212).
+
 ### Changed
 
 - The mod is now called **TOE3 Stormline**: launcher label, menu title, release titles and release notes. The package name and signing key are unchanged, so it still installs over the existing mod.
@@ -14,6 +37,10 @@ Release tags have the form `toe3-v<game version>-b<game build>-mod-<source revis
 ### Added
 
 - This changelog, and a **Changes in this build** section in every release generated from the commit history since the previous published release.
+
+### Verified
+
+- A successful in-game OTA installation on the Huawei tablet was confirmed after this release.
 
 ## [toe3-v0.7.64-b193-mod-a57fa36] - 2026-10-15
 
@@ -51,3 +78,4 @@ First published release, for game 0.7.64 (build 193) on arm64-v8a. Source [`2141
 [toe3-v0.7.64-b193-mod-a57fa36]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-a57fa36
 [toe3-v0.7.64-b193-mod-f4e2100]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-f4e2100
 [toe3-v0.7.64-b193-mod-2141bcc]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-2141bcc
+[toe3-v0.7.64-b193-mod-da547e1]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-da547e1

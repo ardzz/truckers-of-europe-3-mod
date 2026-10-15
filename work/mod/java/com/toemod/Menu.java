@@ -1,46 +1,65 @@
 package com.toemod;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Application;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.InputType;
+import android.text.TextUtils;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.ContextThemeWrapper;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.widget.CompoundButton;
+import android.widget.EditText;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.toemod.MenuModel.Page;
+
 import org.json.JSONException;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -49,8 +68,12 @@ import java.util.Map;
  *
  * The overlay is a transparent, non-clickable FrameLayout added to the activity's content
  * view (no overlay permission). Only the icon/panel consume touches; everything else falls
- * through to the Unity player. The Updates section works independently of the native hooks,
- * so a broken or disabled mod can still be updated.
+ * through to the Unity player.
+ *
+ * The panel shows one screen at a time between a fixed header and a fixed bottom bar
+ * (Home / World / Updates / Debug); each Home category opens its own screen. Updates and Debug
+ * work independently of the native hooks and the Mods switch, so a broken or disabled mod can
+ * still be inspected and updated.
  */
 public final class Menu {
     static final String TAG = "toemod";
@@ -66,14 +89,40 @@ public final class Menu {
     private static final int READY = 1;
     private static final int FAILED = 2;
 
-    private static final int ACCENT = 0xFFFF9800;
-    private static final int ERROR = 0xFFE53935;
-    private static final int TEXT = 0xFFEEEEEE;
-    private static final int TEXT_DIM = 0xFF9E9E9E;
-    private static final int PANEL_BG = 0xF0181818;
-    private static final int PANEL_W_DP = 320;
+    // Opaque panel: rain, fog or night behind it never changes text contrast.
+    private static final int PANEL_BG = 0xFF111A25;
+    private static final int SURFACE = 0xFF1B2735;
+    private static final int TEXT = 0xFFF4F6F8;
+    private static final int TEXT_DIM = 0xFFB4C0CD;
+    private static final int ACCENT = 0xFFFFD884;
+    private static final int ERROR = 0xFFFF9B91;
+    private static final int LINE = 0x40B4C0CD;
+    private static final int PRESSED = 0x40FFD884;
+    private static final float DIMMED = 0.7f; // feature controls while the Mods switch is off
+    private static final int PANEL_W_DP = 360;
+    private static final int PANEL_H_DP = 600;
     private static final int ICON_DP = 46;
+    private static final int TOUCH_DP = 44;
     private static final float MAX_H_FRACTION = 0.8f;
+
+    private static final Page[] TABS = {Page.HOME, Page.WORLD, Page.UPDATES, Page.DEBUG};
+    private static final String[] TAB_NAMES = {"Home", "World", "Updates", "Debug"};
+    private static final int UPDATES_TAB = 2;
+    private static final String[] DEBUG_NAMES = {"Runtime", "Weather", "Truck"};
+    private static final int DEBUG_RUNTIME = 0;
+    private static final int DEBUG_WEATHER = 1;
+    private static final int DEBUG_TRUCK = 2;
+
+    /** Display units of numeric controls (presentation only: ids, ranges and defaults come from native). */
+    private static final Map<String, String> UNITS = new HashMap<>();
+
+    static {
+        UNITS.put("pay_mult", "\u00D7");
+        UNITS.put("xp_mult", "\u00D7");
+        UNITS.put("engine_mult", "\u00D7");
+        UNITS.put("time_hour", "h");
+        UNITS.put("traffic", "cars");
+    }
 
     // Process-wide: the native library and hook state outlive a recreated activity.
     private static boolean sLibLoaded;
@@ -81,6 +130,10 @@ public final class Menu {
     private static int sState = WAITING;
     private static List<Feature> sFeatures;
     private static Menu sCurrent;
+    // Also process-wide, so a recreated activity reopens the screen the user left.
+    private static Page sPage = Page.HOME;
+    private static String sCategory;
+    private static int sDebugSection = DEBUG_RUNTIME;
 
     private final Activity activity;
     private final Context ctx;
@@ -101,12 +154,46 @@ public final class Menu {
     private float posFy;
     private long pollStart;
     private String failMsg = "";
+    private boolean resumed;
+
+    /** The one reusable diagnostics buffer; NaN until the first native read. */
+    private final double[] snapshot = new double[Diagnostics.SIZE];
+    private long lastSampleAt; // uptime of the last native read, 0 = never
+    private String snapshotError; // set once reading diagnostics failed in this menu
+    private boolean polling;
+
+    private Map<String, List<Feature>> groups;
+    private final Map<String, ScrollView> categoryPages = new HashMap<>();
+    private final Map<String, TextView> categorySummaries = new LinkedHashMap<>();
+    private final List<View> featureBoxes = new ArrayList<>();
+    private final TextView[] tabs = new TextView[TABS.length];
+    private final TextView[] debugTabs = new TextView[DEBUG_NAMES.length];
+    private final Table[] debugTables = new Table[DEBUG_NAMES.length];
 
     private FrameLayout root;
     private TextView icon;
-    private MaxHeightLayout panel;
-    private TextView status;
-    private LinearLayout list;
+    private PanelLayout panel;
+    private TextView back;
+    private TextView subtitle;
+    private TextView masterBanner;
+    private FrameLayout pages;
+    private ScrollView homePage;
+    private ScrollView worldPage;
+    private ScrollView updatesPage;
+    private ScrollView debugPage;
+
+    private TextView homeState;
+    private TextView homeBuild;
+    private Switch masterSwitch;
+    private TextView masterNote;
+    private TextView worldSummary;
+    private LinearLayout homeRows;
+
+    private TextView weatherHeadline;
+    private TextView weatherDetail;
+    private TextView weatherHint;
+    private LinearLayout worldControls;
+
     private TextView upInstalled;
     private TextView upStatus;
     private ProgressBar upProgress;
@@ -116,6 +203,9 @@ public final class Menu {
     private TextView upInstall;
     private TextView upCancel;
     private TextView upRelease;
+    private TextView upChanges;
+    private AlertDialog changesDialog;
+    private AlertDialog valueDialog;
 
     public static void start(Activity a) {
         try {
@@ -155,15 +245,22 @@ public final class Menu {
         posFx = prefs.getFloat(K_POS_X, 0f);
         posFy = prefs.getFloat(K_POS_Y, 0.3f);
         updater = Updater.get(a);
+        Arrays.fill(snapshot, Double.NaN);
         lifecycle = new Application.ActivityLifecycleCallbacks() {
             @Override public void onActivityCreated(Activity act, Bundle b) {}
             @Override public void onActivityStarted(Activity act) {}
             @Override public void onActivityResumed(Activity act) {
                 if (act != activity) return;
+                resumed = true;
                 updater.onResume();
                 ensureAttached();
+                updatePolling();
             }
-            @Override public void onActivityPaused(Activity act) {}
+            @Override public void onActivityPaused(Activity act) {
+                if (act != activity) return;
+                resumed = false;
+                updatePolling();
+            }
             @Override public void onActivityStopped(Activity act) {}
             @Override public void onActivitySaveInstanceState(Activity act, Bundle b) {}
             @Override public void onActivityDestroyed(Activity act) {
@@ -231,13 +328,20 @@ public final class Menu {
             pollStart = SystemClock.uptimeMillis();
             handler.post(poll);
         }
-        updateStatus();
+        renderMaster();
+        refreshHome();
         updater.setListener(updaterListener);
         renderUpdates();
+        showPage(sPage, sCategory);
     }
 
     private void destroy() {
         handler.removeCallbacksAndMessages(null);
+        polling = false;
+        if (changesDialog != null) changesDialog.dismiss();
+        changesDialog = null;
+        if (valueDialog != null) valueDialog.dismiss();
+        valueDialog = null;
         updater.clearListener(updaterListener);
         activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
         if (root != null && root.getParent() instanceof ViewGroup) ((ViewGroup) root.getParent()).removeView(root);
@@ -276,7 +380,7 @@ public final class Menu {
         Log.i(TAG, "hooks ready, " + fs.size() + " features");
         applyAll();
         showFeatures();
-        updateStatus();
+        refreshHome();
     }
 
     private void fail(String msg) {
@@ -284,9 +388,12 @@ public final class Menu {
         failMsg = msg;
         Log.e(TAG, msg);
         Toast.makeText(activity, "toemod: " + msg + " - mods inactive", Toast.LENGTH_LONG).show();
-        list.removeAllViews();
-        list.addView(hint("Mod inactive: " + msg));
-        updateStatus();
+        homeRows.removeAllViews();
+        homeRows.addView(hint("Mod inactive: " + msg + ". Updates and Debug still work."));
+        worldControls.removeAllViews();
+        worldControls.addView(hint("Mod inactive: " + msg));
+        if (sPage == Page.CATEGORY) showPage(Page.HOME, null);
+        refreshHome();
     }
 
     private void send(Feature f) {
@@ -319,35 +426,240 @@ public final class Menu {
         master = on;
         prefs.edit().putBoolean(K_MASTER, on).apply();
         applyAll();
-        list.setAlpha(on ? 1f : 0.5f);
-        updateStatus();
+        renderMaster();
+        refreshHome();
     }
 
-    private void updateStatus() {
-        if (status == null) return;
+    private void renderMaster() {
+        if (masterSwitch == null) return;
+        if (masterSwitch.isChecked() != master) masterSwitch.setChecked(master);
+        setText(masterSwitch, master ? "Mods ON" : "Mods OFF");
+        setText(masterNote, master ? "Enabled controls apply in game." : "Controls stay saved but are not applied.");
+        for (View b : featureBoxes) b.setAlpha(master ? 1f : DIMMED);
+        show(masterBanner, !master && (sPage == Page.CATEGORY || sPage == Page.WORLD));
+    }
+
+    private static int countOn(List<Feature> fs) {
+        int on = 0;
+        for (Feature f : fs) if (f.on) on++;
+        return on;
+    }
+
+    /** Hook status on Home, the icon ring and the per-category "n of m on" summaries. */
+    private void refreshHome() {
+        if (icon == null) return;
         int ring;
         switch (sState) {
             case READY:
-                int n = sFeatures.size();
-                status.setText(n + " features" + (master ? "" : " - mods OFF"));
-                status.setTextColor(TEXT_DIM);
+                setText(homeState, "Ready \u00B7 " + sFeatures.size() + " controls, " + countOn(sFeatures) + " on");
+                setColor(homeState, TEXT);
                 ring = master ? ACCENT : TEXT_DIM;
                 break;
             case FAILED:
-                status.setText(failMsg);
-                status.setTextColor(ERROR);
+                setText(homeState, "Mods inactive: " + failMsg);
+                setColor(homeState, ERROR);
                 ring = ERROR;
                 break;
             default:
-                status.setText("waiting for game hooks...");
-                status.setTextColor(TEXT_DIM);
+                setText(homeState, "Waiting for game hooks\u2026");
+                setColor(homeState, TEXT_DIM);
                 ring = TEXT_DIM;
         }
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.OVAL);
-        bg.setColor(0xE0202020);
+        bg.setColor(PANEL_BG);
         bg.setStroke(dp(3), ring);
         icon.setBackground(bg);
+
+        String world = "Weather status, time of day, traffic";
+        List<Feature> worldFeatures = groups == null ? null : groups.get(MenuModel.WORLD);
+        setText(worldSummary, worldFeatures == null ? world : world + " \u00B7 " + summary(worldFeatures));
+        for (Map.Entry<String, TextView> e : categorySummaries.entrySet()) {
+            setText(e.getValue(), summary(groups.get(e.getKey())));
+        }
+    }
+
+    private static String summary(List<Feature> fs) {
+        return countOn(fs) + " of " + fs.size() + " on";
+    }
+
+    // ------------------------------------------------------------------ live diagnostics
+
+    private final Runnable snapshotPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!polling) return;
+            sample();
+            renderLive();
+            handler.postDelayed(this, Diagnostics.POLL_MS);
+        }
+    };
+
+    /** Reads diagnostics only while World or Debug is on screen; renders the visible one right away. */
+    private void updatePolling() {
+        handler.removeCallbacks(snapshotPoll);
+        polling = panel != null && MenuModel.needsSnapshot(sPage, panel.getVisibility() == View.VISIBLE, resumed);
+        if (polling) handler.post(snapshotPoll);
+    }
+
+    private void sample() {
+        if (snapshotError != null) return;
+        long now = SystemClock.uptimeMillis();
+        if (lastSampleAt != 0 && now - lastSampleAt < Diagnostics.POLL_MS) return; // <= 2 Hz across page switches
+        if (!sLibLoaded) {
+            snapshotError = sLibError != null ? sLibError : "native library missing";
+            return;
+        }
+        try {
+            Native.debugSnapshot(snapshot);
+            lastSampleAt = now;
+        } catch (Throwable t) { // never let the viewer take the game down
+            Log.e(TAG, "debugSnapshot failed", t);
+            Arrays.fill(snapshot, Double.NaN);
+            snapshotError = t instanceof UnsatisfiedLinkError ? "native library has no diagnostics" : t.toString();
+        }
+    }
+
+    private void renderLive() {
+        if (sPage == Page.WORLD) renderWeatherStatus();
+        else if (sPage == Page.DEBUG) renderDebug(sDebugSection);
+    }
+
+    private void renderWeatherStatus() {
+        String head;
+        String detail;
+        String note;
+        int color;
+        if (snapshotError != null) {
+            head = "Weather status unavailable";
+            detail = snapshotError;
+            note = "";
+            color = ERROR;
+        } else {
+            Diagnostics.Weather w = Diagnostics.weather(snapshot);
+            head = Diagnostics.headline(w, snapshot);
+            detail = Diagnostics.detail(w, snapshot);
+            note = Diagnostics.hint(w, snapshot);
+            color = w == Diagnostics.Weather.ACTIVE ? ACCENT
+                    : w == Diagnostics.Weather.WAITING || w == Diagnostics.Weather.STALE || w == Diagnostics.Weather.OFF
+                    ? TEXT_DIM : TEXT;
+        }
+        setText(weatherHeadline, head);
+        setColor(weatherHeadline, color);
+        setText(weatherDetail, detail);
+        setText(weatherHint, note);
+        show(weatherHint, !note.isEmpty());
+    }
+
+    private void renderDebug(int section) {
+        switch (section) {
+            case DEBUG_WEATHER:
+                renderWeatherTable(debugTables[DEBUG_WEATHER]);
+                break;
+            case DEBUG_TRUCK:
+                renderTruckTable(debugTables[DEBUG_TRUCK]);
+                break;
+            default:
+                renderRuntimeTable(debugTables[DEBUG_RUNTIME]);
+        }
+    }
+
+    private String live(int index) {
+        if (snapshotError != null) return "unavailable";
+        return lastSampleAt == 0 ? "reading\u2026" : Diagnostics.count(snapshot[index]);
+    }
+
+    private void renderRuntimeTable(Table t) {
+        t.begin();
+        t.put("Native library", sLibLoaded ? "loaded" : "missing", sLibLoaded ? TEXT : ERROR);
+        t.put("Game hooks", sState == READY ? "ready" : sState == FAILED ? "failed: " + failMsg : "waiting",
+                sState == FAILED ? ERROR : TEXT);
+        t.put("Hooks installed", live(Diagnostics.HOOKS_INSTALLED), TEXT);
+        t.put("Hooks failed", live(Diagnostics.HOOKS_FAILED), problem(Diagnostics.HOOKS_FAILED) ? ERROR : TEXT);
+        t.put("Patch steps failed", live(Diagnostics.PATCHES_FAILED), problem(Diagnostics.PATCHES_FAILED) ? ERROR : TEXT);
+        t.put("Controls", sState == READY ? sFeatures.size() + " registered, " + countOn(sFeatures) + " on" : "not loaded", TEXT);
+        t.put("Mods switch", master ? "ON" : "OFF (controls not applied)", master ? TEXT : ACCENT);
+        UpdatePolicy.Identity id = updater.installed();
+        t.put("Mod build", id == null ? "unknown" : id.modBuild == 0 ? "local build" : Long.toString(id.modBuild), TEXT);
+        t.put("Release tag", id == null ? "unknown" : id.tag, TEXT);
+        t.put("Source revision", id == null ? "unknown" : id.revision.substring(0, Math.min(12, id.revision.length())), TEXT);
+        t.put("Game version", id == null ? "unknown" : id.versionName + " (" + id.versionCode + ")", TEXT);
+        t.put("APK ABI", id == null ? "unknown" : id.abi, TEXT);
+        t.put("Android", Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")", TEXT);
+        if (snapshotError != null) t.put("Live data", "unavailable: " + snapshotError, ERROR);
+        t.end();
+    }
+
+    private boolean problem(int index) {
+        double v = snapshot[index];
+        return snapshotError == null && Diagnostics.known(v) && v > 0;
+    }
+
+    private void renderWeatherTable(Table t) {
+        double[] s = snapshot;
+        Diagnostics.Freshness fresh = Diagnostics.freshness(s[Diagnostics.WEATHER_AGE_MS]);
+        int v = fresh == Diagnostics.Freshness.FRESH ? TEXT : TEXT_DIM;
+        t.begin();
+        t.put("Status", snapshotError != null ? "unavailable: " + snapshotError
+                : Diagnostics.headline(Diagnostics.weather(s), s), snapshotError != null ? ERROR : ACCENT);
+        t.put("Sky sample", Diagnostics.age(s[Diagnostics.WEATHER_AGE_MS]), fresh == Diagnostics.Freshness.STALE ? ACCENT : v);
+        t.put("Override", onOff(s[Diagnostics.WEATHER_ENABLED]), v);
+        t.put("Requested", Diagnostics.weatherName(s[Diagnostics.WEATHER_REQUESTED]), v);
+        t.put("Current", Diagnostics.weatherName(s[Diagnostics.WEATHER_CURRENT]), v);
+        t.put("Next", Diagnostics.weatherName(s[Diagnostics.WEATHER_NEXT]), v);
+        t.put("Next change in", Diagnostics.number(s[Diagnostics.WEATHER_TIMER_S], 0, "s"), v);
+        t.put("Transition running", Diagnostics.flag(s[Diagnostics.WEATHER_CHANGING]), v);
+        t.put("Rain intensity", Diagnostics.number(s[Diagnostics.RAIN], 2, ""), v);
+        t.put("Cloud intensity", Diagnostics.number(s[Diagnostics.CLOUD], 2, ""), v);
+        t.put("Fog intensity", Diagnostics.number(s[Diagnostics.MIST], 2, ""), v);
+        t.put("Target intensity", Diagnostics.number(s[Diagnostics.WEATHER_TARGET], 2, ""), v);
+        t.put("No-rain area", Diagnostics.flag(s[Diagnostics.NO_RAIN_AREA]), v);
+        t.put("Rain stop zone", Diagnostics.flag(s[Diagnostics.STOP_RAIN_AREA]), v);
+        t.put("Game clock", Diagnostics.clock(s[Diagnostics.HOUR]), v);
+        t.put("Requests sent / applied", Diagnostics.count(s[Diagnostics.REQUEST_GENERATION]) + " / "
+                + Diagnostics.count(s[Diagnostics.APPLIED_GENERATION]), v);
+        t.put("Weather changes applied", Diagnostics.count(s[Diagnostics.TRANSITIONS]), v);
+        t.end();
+    }
+
+    private void renderTruckTable(Table t) {
+        double[] s = snapshot;
+        Diagnostics.Freshness fresh = Diagnostics.freshness(s[Diagnostics.TRUCK_AGE_MS]);
+        int v = fresh == Diagnostics.Freshness.FRESH ? TEXT : TEXT_DIM;
+        String status;
+        if (snapshotError != null) status = "unavailable: " + snapshotError;
+        else if (fresh == Diagnostics.Freshness.MISSING) status = "Waiting for a truck: start driving";
+        else if (fresh == Diagnostics.Freshness.STALE) status = "Not live: paused, in a menu or loading";
+        else status = "Live";
+        t.begin();
+        t.put("Status", status, snapshotError != null ? ERROR : fresh == Diagnostics.Freshness.FRESH ? ACCENT : TEXT_DIM);
+        t.put("Truck sample", Diagnostics.age(s[Diagnostics.TRUCK_AGE_MS]), fresh == Diagnostics.Freshness.STALE ? ACCENT : v);
+        t.put("Speed", Diagnostics.number(s[Diagnostics.SPEED_KPH], 0, "km/h"), v);
+        t.put("Fuel", Diagnostics.number(s[Diagnostics.FUEL_L], 1, "L"), v);
+        t.put("Fuel level", Diagnostics.percent(s[Diagnostics.FUEL_FRACTION]), v);
+        t.put("Truck health", Diagnostics.percent(s[Diagnostics.HEALTH_FRACTION]), v);
+        t.put("Dirt", Diagnostics.number(s[Diagnostics.DIRT], 2, ""), v);
+        t.put("Dust", Diagnostics.number(s[Diagnostics.DUST], 2, ""), v);
+        t.put("Rain on truck", Diagnostics.flag(s[Diagnostics.TRUCK_RAINING]), v);
+        t.end();
+    }
+
+    private static String onOff(double v) {
+        return Diagnostics.known(v) ? (v != 0 ? "on" : "off") : "unknown";
+    }
+
+    /** Plain text of all three sections; holds build and game state only, no account data. */
+    private void copyDiagnostics() {
+        StringBuilder b = new StringBuilder("TOE3 Stormline diagnostics\n");
+        for (int i = 0; i < debugTables.length; i++) {
+            renderDebug(i);
+            b.append('\n').append(DEBUG_NAMES[i]).append('\n');
+            debugTables[i].appendTo(b);
+        }
+        ClipboardManager cm = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(ClipData.newPlainText("Stormline diagnostics", b.toString()));
+        Toast.makeText(activity, "Diagnostics copied", Toast.LENGTH_SHORT).show();
     }
 
     // ------------------------------------------------------------------ geometry
@@ -356,7 +668,7 @@ public final class Menu {
         int w = root.getWidth();
         int h = root.getHeight();
         if (w == 0 || h == 0) return;
-        panel.maxHeight = (int) (h * MAX_H_FRACTION);
+        panel.fixedHeight = Math.min((int) (h * MAX_H_FRACTION), dp(PANEL_H_DP));
         ViewGroup.LayoutParams lp = panel.getLayoutParams();
         lp.width = Math.min(dp(PANEL_W_DP), w - dp(16));
         panel.setLayoutParams(lp);
@@ -392,12 +704,15 @@ public final class Menu {
         icon.setVisibility(View.GONE);
         panel.setVisibility(View.VISIBLE);
         place(panel);
+        if (sPage == Page.HOME) refreshHome();
+        updatePolling();
     }
 
     private void collapse() {
         panel.setVisibility(View.GONE);
         icon.setVisibility(View.VISIBLE);
         place(icon);
+        updatePolling();
     }
 
     /** Drag to move {@code target}; a touch that never exceeds touch slop is a click. */
@@ -441,16 +756,134 @@ public final class Menu {
         }
     }
 
+    // ------------------------------------------------------------------ screens
+
+    private void showPage(Page page, String category) {
+        if (pages == null) return;
+        if (page == Page.CATEGORY && (sState != READY || groups == null || category == null
+                || MenuModel.WORLD.equals(category) || !groups.containsKey(category))) {
+            page = Page.HOME;
+        }
+        sPage = page;
+        sCategory = page == Page.CATEGORY ? category : null;
+        View target;
+        switch (page) {
+            case CATEGORY:
+                target = categoryPage(category);
+                break;
+            case WORLD:
+                target = worldPage;
+                break;
+            case UPDATES:
+                target = updatesPage;
+                break;
+            case DEBUG:
+                target = debugPage;
+                break;
+            default:
+                target = homePage;
+        }
+        for (int i = 0; i < pages.getChildCount(); i++) {
+            View c = pages.getChildAt(i);
+            show(c, c == target);
+        }
+        Page tab = MenuModel.tab(page);
+        for (int i = 0; i < TABS.length; i++) {
+            boolean selected = TABS[i] == tab;
+            tabs[i].setSelected(selected);
+            tabs[i].setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            if (TABS[i] == page) setText(subtitle, TAB_NAMES[i]);
+        }
+        if (page == Page.CATEGORY) setText(subtitle, category);
+        show(back, page == Page.CATEGORY);
+        renderMaster();
+        if (page == Page.HOME) refreshHome();
+        if (page == Page.DEBUG) showDebugSection(sDebugSection);
+        updatePolling();
+    }
+
+    private void showDebugSection(int section) {
+        sDebugSection = section;
+        for (int i = 0; i < debugTables.length; i++) {
+            show(debugTables[i].box, i == section);
+            debugTabs[i].setSelected(i == section);
+            debugTabs[i].setTypeface(i == section ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        }
+        renderDebug(section);
+    }
+
+    private void showFeatures() {
+        groups = new LinkedHashMap<>();
+        for (Feature f : sFeatures) {
+            List<Feature> g = groups.get(f.category);
+            if (g == null) {
+                g = new ArrayList<>();
+                groups.put(f.category, g);
+            }
+            g.add(f);
+        }
+        for (ScrollView p : categoryPages.values()) pages.removeView(p);
+        categoryPages.clear();
+        categorySummaries.clear();
+        featureBoxes.clear();
+        featureBoxes.add(worldControls);
+
+        homeRows.removeAllViews();
+        for (final String category : groups.keySet()) {
+            if (category.equals(MenuModel.WORLD)) continue;
+            TextView summary = label(13, TEXT_DIM);
+            categorySummaries.put(category, summary);
+            homeRows.addView(navRow(category, summary, false, new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showPage(Page.CATEGORY, category);
+                }
+            }), rowParams());
+        }
+        if (groups.isEmpty()) homeRows.addView(hint("No features registered."));
+
+        worldControls.removeAllViews();
+        List<Feature> world = groups.get(MenuModel.WORLD);
+        if (world == null) worldControls.addView(hint("No world controls registered."));
+        else addFeatures(worldControls, world);
+
+        renderMaster();
+        refreshHome();
+        if (sPage == Page.CATEGORY) showPage(sPage, sCategory); // a restored category screen needs its controls
+    }
+
+    private ScrollView categoryPage(String category) {
+        ScrollView page = categoryPages.get(category);
+        if (page != null) return page;
+        LinearLayout content = pageContent();
+        LinearLayout box = vertical();
+        addFeatures(box, groups.get(category));
+        box.setAlpha(master ? 1f : DIMMED);
+        featureBoxes.add(box);
+        content.addView(box, matchWrap());
+        page = scroll(content);
+        pages.addView(page, matchMatch());
+        categoryPages.put(category, page);
+        return page;
+    }
+
+    private void addFeatures(LinearLayout box, List<Feature> features) {
+        for (int i = 0; i < features.size(); i++) {
+            if (i > 0) box.addView(divider());
+            box.addView(buildFeature(features.get(i)), matchWrap());
+        }
+    }
+
     // ------------------------------------------------------------------ views
 
     private TextView buildIcon() {
         TextView t = new TextView(ctx);
         t.setText("TOE");
-        t.setTextColor(Color.WHITE);
+        t.setTextColor(TEXT);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         t.setTypeface(Typeface.DEFAULT_BOLD);
         t.setGravity(Gravity.CENTER);
-        t.setContentDescription("Mod menu");
+        t.setContentDescription("Open Stormline menu");
         t.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -461,45 +894,110 @@ public final class Menu {
         return t;
     }
 
-    private MaxHeightLayout buildPanel() {
-        MaxHeightLayout p = new MaxHeightLayout(ctx);
-        p.maxHeight = (int) (ctx.getResources().getDisplayMetrics().heightPixels * MAX_H_FRACTION);
+    private PanelLayout buildPanel() {
+        PanelLayout p = new PanelLayout(ctx);
+        p.fixedHeight = Math.min((int) (ctx.getResources().getDisplayMetrics().heightPixels * MAX_H_FRACTION), dp(PANEL_H_DP));
         p.setOrientation(LinearLayout.VERTICAL);
-        p.setPadding(dp(12), dp(8), dp(12), dp(10));
-        p.setBackground(rounded(PANEL_BG, dp(12), 0x66FF9800));
+        p.setPadding(dp(8), dp(4), dp(8), dp(4));
+        p.setBackground(rounded(PANEL_BG, dp(14), 0x66FFD884));
         p.setClickable(true); // touches on the panel's own area must not reach the game
 
-        LinearLayout header = new LinearLayout(ctx);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
+        p.addView(buildHeader(p), matchWrap());
 
-        LinearLayout titleBox = new LinearLayout(ctx);
-        titleBox.setOrientation(LinearLayout.VERTICAL);
-        TextView title = new TextView(ctx);
-        title.setText("TOE3 Stormline");
-        title.setTextColor(ACCENT);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        masterBanner = action("Mods are OFF \u00B7 tap to turn on", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                masterSwitch.setChecked(true);
+            }
+        });
+        masterBanner.setTextColor(ACCENT);
+        LinearLayout.LayoutParams bannerLp = matchWrap();
+        bannerLp.bottomMargin = dp(4);
+        p.addView(masterBanner, bannerLp);
+
+        pages = new FrameLayout(ctx);
+        homePage = buildHome();
+        worldPage = buildWorld();
+        updatesPage = buildUpdates();
+        debugPage = buildDebug();
+        for (View v : new View[] {homePage, worldPage, updatesPage, debugPage}) pages.addView(v, matchMatch());
+        // Takes exactly the height between header and tab bar, so the tab bar never moves.
+        p.addView(pages, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        p.addView(divider());
+        p.addView(buildTabs(), matchWrap());
+        return p;
+    }
+
+    private View buildHeader(View dragTarget) {
+        LinearLayout header = horizontal();
+        back = iconButton("\u2190", "Back to Home");
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showPage(Page.HOME, null);
+            }
+        });
+        header.addView(back, new LinearLayout.LayoutParams(dp(TOUCH_DP), dp(TOUCH_DP)));
+
+        LinearLayout titleBox = vertical();
+        titleBox.setGravity(Gravity.CENTER_VERTICAL);
+        titleBox.setPadding(dp(8), 0, dp(8), 0);
+        TextView title = label(16, ACCENT);
+        title.setText("Stormline");
         title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setSingleLine(true);
         titleBox.addView(title);
-        status = new TextView(ctx);
-        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        titleBox.addView(status);
-        titleBox.setOnTouchListener(new Drag(p)); // header is the drag handle
-        header.addView(titleBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        subtitle = label(12, TEXT_DIM);
+        subtitle.setSingleLine(true);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        titleBox.addView(subtitle);
+        titleBox.setOnTouchListener(new Drag(dragTarget)); // only the title is the drag handle, never a button
+        header.addView(titleBox, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
-        TextView close = button("\u00D7");
-        close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        close.setContentDescription("Collapse");
+        TextView close = iconButton("\u00D7", "Collapse menu");
         close.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 collapse();
             }
         });
-        header.addView(close, new LinearLayout.LayoutParams(dp(36), dp(36)));
-        p.addView(header);
+        header.addView(close, new LinearLayout.LayoutParams(dp(TOUCH_DP), dp(TOUCH_DP)));
+        return header;
+    }
 
-        Switch masterSwitch = makeSwitch("Mods enabled");
+    private View buildTabs() {
+        LinearLayout bar = horizontal();
+        bar.setPadding(0, dp(4), 0, 0);
+        for (int i = 0; i < TABS.length; i++) {
+            final Page page = TABS[i];
+            TextView t = choiceButton(TAB_NAMES[i]);
+            t.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showPage(page, null);
+                }
+            });
+            tabs[i] = t;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1f);
+            lp.leftMargin = lp.rightMargin = dp(2);
+            bar.addView(t, lp);
+        }
+        return bar;
+    }
+
+    // ------------------------------------------------------------------ home
+
+    private ScrollView buildHome() {
+        LinearLayout content = pageContent();
+        LinearLayout card = card();
+        homeState = label(15, TEXT);
+        homeState.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(homeState, matchWrap());
+        homeBuild = label(13, TEXT_DIM);
+        homeBuild.setPadding(0, dp(2), 0, 0);
+        card.addView(homeBuild, matchWrap());
+        card.addView(divider());
+        masterSwitch = makeSwitch("Mods ON");
         masterSwitch.setTypeface(Typeface.DEFAULT_BOLD);
         masterSwitch.setChecked(master);
         masterSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
@@ -508,53 +1006,337 @@ public final class Menu {
                 setMaster(checked);
             }
         });
-        p.addView(masterSwitch, matchWrap());
-        p.addView(divider());
+        card.addView(masterSwitch, matchWrap());
+        masterNote = label(12, TEXT_DIM);
+        card.addView(masterNote, matchWrap());
+        content.addView(card, cardParams());
 
-        ScrollView scroll = new ScrollView(ctx);
-        LinearLayout content = new LinearLayout(ctx);
-        content.setOrientation(LinearLayout.VERTICAL);
-        list = new LinearLayout(ctx);
-        list.setOrientation(LinearLayout.VERTICAL);
-        list.setAlpha(master ? 1f : 0.5f);
-        list.addView(hint("Waiting for hooks to install..."));
-        content.addView(list, matchWrap());
-        // Outside the dimmed feature list: updating must work with mods off or the hooks failed.
-        content.addView(divider());
-        content.addView(buildUpdates(), matchWrap());
-        scroll.addView(content, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        // Last child: LinearLayout hands it only the height left under maxHeight, so it scrolls.
-        p.addView(scroll, matchWrap());
-        return p;
+        worldSummary = label(13, TEXT_DIM);
+        content.addView(navRow("World", worldSummary, true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showPage(Page.WORLD, null);
+            }
+        }), rowParams());
+        homeRows = vertical();
+        homeRows.addView(hint("Categories appear once the game hooks are installed."));
+        content.addView(homeRows, matchWrap());
+        return scroll(content);
+    }
+
+    private View navRow(String title, TextView summary, boolean primary, View.OnClickListener click) {
+        LinearLayout row = horizontal();
+        row.setMinimumHeight(dp(56));
+        row.setPadding(dp(14), dp(8), dp(10), dp(8));
+        row.setBackground(pressable(SURFACE, dp(10), primary ? 0x80FFD884 : LINE));
+        row.setClickable(true);
+        row.setOnClickListener(click);
+
+        LinearLayout text = vertical();
+        TextView name = label(16, primary ? ACCENT : TEXT);
+        name.setText(title);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        text.addView(name, matchWrap());
+        text.addView(summary, matchWrap());
+        row.addView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView chevron = label(22, TEXT_DIM);
+        chevron.setText("\u203A");
+        chevron.setPadding(dp(8), 0, 0, 0);
+        row.addView(chevron);
+        return row;
+    }
+
+    // ------------------------------------------------------------------ world
+
+    private ScrollView buildWorld() {
+        LinearLayout content = pageContent();
+        LinearLayout card = card();
+        TextView caption = label(12, TEXT_DIM);
+        caption.setText("Weather in game");
+        card.addView(caption, matchWrap());
+        weatherHeadline = label(17, TEXT);
+        weatherHeadline.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(weatherHeadline, matchWrap());
+        weatherDetail = label(13, TEXT);
+        weatherDetail.setPadding(0, dp(2), 0, 0);
+        card.addView(weatherDetail, matchWrap());
+        weatherHint = label(12, TEXT_DIM);
+        weatherHint.setPadding(0, dp(4), 0, 0);
+        card.addView(weatherHint, matchWrap());
+        content.addView(card, cardParams());
+        renderWeatherStatus();
+
+        worldControls = vertical();
+        worldControls.addView(hint("Controls appear once the game hooks are installed."));
+        content.addView(worldControls, matchWrap());
+        return scroll(content);
+    }
+
+    // ------------------------------------------------------------------ feature controls
+
+    private View buildFeature(final Feature f) {
+        LinearLayout row = vertical();
+        row.setPadding(0, dp(4), 0, dp(8));
+
+        Switch sw = makeSwitch(f.label);
+        sw.setChecked(f.on);
+        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton b, boolean checked) {
+                f.on = checked;
+                save(f);
+                send(f);
+            }
+        });
+        row.addView(sw, matchWrap());
+
+        if (f.hasSlider()) {
+            TextView range = label(12, TEXT_DIM);
+            range.setText("Range " + withUnit(readable(f, f.min) + "\u2013" + readable(f, f.max), f.id)
+                    + " \u00B7 tap the number to type it");
+            row.addView(range, matchWrap());
+            row.addView(new NumberControl(f).line, matchWrap());
+        } else if (f.hasChoices()) {
+            row.addView(buildChoices(f), matchWrap());
+        }
+        return row;
+    }
+
+    /** Slider with step buttons and an exact-value field, all within the native range. */
+    private final class NumberControl implements SeekBar.OnSeekBarChangeListener {
+        final Feature f;
+        final LinearLayout line;
+        private final SeekBar bar;
+        private final TextView value;
+        private boolean tracking;
+
+        NumberControl(Feature feature) {
+            f = feature;
+            bar = new SeekBar(ctx);
+            bar.setMax(f.steps());
+            bar.setProgress(f.toStep(f.value)); // before the listener: no spurious set()
+            ColorStateList accent = ColorStateList.valueOf(ACCENT);
+            bar.setProgressTintList(accent);
+            bar.setThumbTintList(accent);
+            bar.setOnSeekBarChangeListener(this);
+
+            value = button(display(f));
+            value.setTextColor(ACCENT);
+            value.setMinWidth(dp(72));
+            value.setPadding(dp(10), 0, dp(10), 0);
+            value.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    editValue(NumberControl.this);
+                }
+            });
+            TextView minus = button("\u2212");
+            minus.setContentDescription("Decrease " + f.label);
+            minus.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    step(-1);
+                }
+            });
+            TextView plus = button("+");
+            plus.setContentDescription("Increase " + f.label);
+            plus.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    step(1);
+                }
+            });
+
+            line = horizontal();
+            line.addView(minus, new LinearLayout.LayoutParams(dp(TOUCH_DP), dp(TOUCH_DP)));
+            line.addView(bar, new LinearLayout.LayoutParams(0, dp(TOUCH_DP), 1f));
+            line.addView(plus, new LinearLayout.LayoutParams(dp(TOUCH_DP), dp(TOUCH_DP)));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(TOUCH_DP));
+            lp.leftMargin = dp(6);
+            line.addView(value, lp);
+        }
+
+        void set(float v) {
+            f.value = f.clamp(v);
+            bar.setProgress(f.toStep(f.value)); // not fromUser: keeps a typed value that lies between steps
+            setText(value, display(f));
+            save(f);
+            send(f);
+        }
+
+        private void step(int delta) {
+            set(f.fromStep(Math.max(0, Math.min(f.steps(), f.toStep(f.value) + delta))));
+        }
+
+        @Override
+        public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+            if (!fromUser) return;
+            f.value = f.fromStep(p);
+            setText(value, display(f));
+            send(f);
+            if (!tracking) save(f); // keyboard or accessibility adjustment: no stop-tracking event follows
+        }
+
+        @Override
+        public void onStartTrackingTouch(SeekBar s) {
+            tracking = true;
+        }
+
+        @Override
+        public void onStopTrackingTouch(SeekBar s) {
+            tracking = false;
+            save(f);
+        }
+    }
+
+    /** Bounded numeric dialog: refuses (never clamps) text outside the control's native range. */
+    private void editValue(final NumberControl control) {
+        if (activity.isFinishing() || activity.isDestroyed()) return;
+        if (valueDialog != null) valueDialog.dismiss();
+        final Feature f = control.f;
+        final boolean integer = f.type == Feature.TOGGLE_INT;
+        final String rule = "Enter " + (integer ? "a whole number" : "a number") + " from "
+                + withUnit(plain(f, f.min) + " to " + plain(f, f.max), f.id) + ".";
+        AlertDialog.Builder b = new AlertDialog.Builder(activity, android.R.style.Theme_Material_Dialog_Alert);
+        Context dc = b.getContext();
+
+        final EditText input = new EditText(dc);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | (integer ? 0 : InputType.TYPE_NUMBER_FLAG_DECIMAL)
+                | (f.min < 0 ? InputType.TYPE_NUMBER_FLAG_SIGNED : 0));
+        input.setSingleLine(true);
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        input.setText(plain(f, f.value));
+        input.setSelectAllOnFocus(true);
+        TextView help = new TextView(dc);
+        help.setText(rule);
+        help.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout box = new LinearLayout(dc);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(8), dp(24), 0);
+        box.addView(help, matchWrap());
+        box.addView(input, matchWrap());
+
+        final AlertDialog d = b.setTitle(f.label)
+                .setView(box)
+                .setPositiveButton("Set", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        final View.OnClickListener apply = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                float value = MenuModel.parseValue(input.getText().toString(), f.min, f.max, integer);
+                if (Float.isNaN(value)) {
+                    input.setError(rule);
+                    return;
+                }
+                control.set(value);
+                d.dismiss();
+            }
+        };
+        d.setOnShowListener(new DialogInterface.OnShowListener() {
+            @Override
+            public void onShow(DialogInterface di) {
+                d.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(apply);
+            }
+        });
+        input.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+            @Override
+            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+                if (actionId != EditorInfo.IME_ACTION_DONE) return false;
+                apply.onClick(v);
+                return true;
+            }
+        });
+        Window w = d.getWindow();
+        if (w != null) w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        valueDialog = d;
+        d.show();
+        input.requestFocus();
+    }
+
+    /** Choices as a two-column grid so long labels wrap instead of scrolling sideways. */
+    private View buildChoices(final Feature f) {
+        LinearLayout grid = vertical();
+        final RadioButton[] buttons = new RadioButton[f.choices.length];
+        ColorStateList tint = new ColorStateList(
+                new int[][] {{android.R.attr.state_checked}, {}}, new int[] {ACCENT, TEXT_DIM});
+        LinearLayout line = null;
+        for (int i = 0; i < f.choices.length; i++) {
+            if (i % 2 == 0) {
+                line = horizontal();
+                grid.addView(line, matchWrap());
+            }
+            final int index = i;
+            RadioButton rb = new RadioButton(ctx);
+            rb.setText(f.choices[i]);
+            rb.setTextColor(TEXT);
+            rb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            rb.setButtonTintList(tint);
+            rb.setMinHeight(dp(TOUCH_DP));
+            rb.setChecked(i == (int) f.value);
+            rb.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    for (int j = 0; j < buttons.length; j++) buttons[j].setChecked(j == index);
+                    if ((int) f.value == index) return;
+                    f.value = index;
+                    save(f);
+                    send(f);
+                }
+            });
+            buttons[i] = rb;
+            line.addView(rb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        if (f.choices.length % 2 == 1) line.addView(new View(ctx), new LinearLayout.LayoutParams(0, 1, 1f));
+        return grid;
+    }
+
+    /** Plain number as typed into the exact-value dialog. */
+    private static String plain(Feature f, float v) {
+        if (f.type == Feature.TOGGLE_INT) return Long.toString(Math.round((double) v));
+        return new BigDecimal(Float.toString(v)).stripTrailingZeros().toPlainString();
+    }
+
+    /** Whole numbers with thousands separators (money reads 50,000,000), others as plain as the value allows. */
+    private static String readable(Feature f, float v) {
+        if (f.type == Feature.TOGGLE_INT) return String.format(Locale.US, "%,d", Math.round((double) v));
+        return plain(f, v);
+    }
+
+    /** Slider readout: the slider's precision, or the exact value when one was typed between two steps. */
+    private static String display(Feature f) {
+        if (f.type == Feature.TOGGLE_INT) return withUnit(readable(f, f.value), f.id);
+        String s = f.format(f.value);
+        if (Float.parseFloat(s) != f.value) s = plain(f, f.value);
+        return withUnit(s, f.id);
+    }
+
+    private static String withUnit(String s, String id) {
+        String unit = UNITS.get(id);
+        if (unit == null) return s;
+        return unit.equals("\u00D7") ? s + unit : s + " " + unit;
     }
 
     // ------------------------------------------------------------------ updates
 
-    private View buildUpdates() {
-        LinearLayout box = new LinearLayout(ctx);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(0, 0, 0, dp(4));
-
-        TextView head = label(13, ACCENT);
-        head.setText("Updates");
-        head.setTypeface(Typeface.DEFAULT_BOLD);
-        head.setPadding(0, dp(10), 0, dp(4));
-        box.addView(head, matchWrap());
-
-        upInstalled = label(12, TEXT_DIM);
-        box.addView(upInstalled, matchWrap());
-        upStatus = label(13, TEXT);
-        upStatus.setPadding(0, dp(4), 0, 0);
-        box.addView(upStatus, matchWrap());
+    private ScrollView buildUpdates() {
+        LinearLayout content = pageContent();
+        LinearLayout card = card();
+        upInstalled = label(13, TEXT_DIM);
+        card.addView(upInstalled, matchWrap());
+        upStatus = label(14, TEXT);
+        upStatus.setPadding(0, dp(6), 0, 0);
+        card.addView(upStatus, matchWrap());
         upProgress = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
         upProgress.setMax(1000);
         upProgress.setProgressTintList(ColorStateList.valueOf(ACCENT));
-        box.addView(upProgress, matchWrap());
-        upSaveHint = label(12, ACCENT);
+        card.addView(upProgress, matchWrap());
+        upSaveHint = label(13, ACCENT);
         upSaveHint.setText("Save your game before installing: Android closes the game to update it.");
         upSaveHint.setPadding(0, dp(4), 0, 0);
-        box.addView(upSaveHint, matchWrap());
+        card.addView(upSaveHint, matchWrap());
+        content.addView(card, cardParams());
 
         upDownload = action("Download", true, new View.OnClickListener() {
             @Override
@@ -574,7 +1356,7 @@ public final class Menu {
                 updater.cancel();
             }
         });
-        upCheck = action("Check", false, new View.OnClickListener() {
+        upCheck = action("Check for updates", false, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 updater.check();
@@ -586,19 +1368,20 @@ public final class Menu {
                 openReleasePage();
             }
         });
-        HorizontalScrollView actions = new HorizontalScrollView(ctx);
-        actions.setHorizontalScrollBarEnabled(false);
-        LinearLayout row = new LinearLayout(ctx);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, dp(6), 0, 0);
-        for (TextView b : new TextView[] {upDownload, upInstall, upCancel, upCheck, upRelease}) {
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
-            lp.rightMargin = dp(6);
-            row.addView(b, lp);
+        upChanges = action("Changelog", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showChangelog();
+            }
+        });
+        // One full-width action per row: every action is reachable without sideways scrolling.
+        for (TextView b : new TextView[] {upDownload, upInstall, upCancel, upCheck, upRelease, upChanges}) {
+            content.addView(b, rowParams());
         }
-        actions.addView(row);
-        box.addView(actions, matchWrap());
-        return box;
+        TextView note = label(12, TEXT_DIM);
+        note.setText("Updates work even with Mods off or when the game hooks failed.");
+        content.addView(note, matchWrap());
+        return scroll(content);
     }
 
     private void renderUpdates() {
@@ -607,6 +1390,9 @@ public final class Menu {
         UpdatePolicy.Identity inst = updater.installed();
         upInstalled.setText(inst == null ? "Installed: unknown" : "Installed: "
                 + (inst.modBuild == 0 ? "local build" : "build " + inst.modBuild) + " \u00B7 game " + inst.versionName
+                + "\n" + inst.tag);
+        setText(homeBuild, inst == null ? "Installed build unknown"
+                : (inst.modBuild == 0 ? "Local build" : "Build " + inst.modBuild) + " \u00B7 game " + inst.versionName
                 + "\n" + inst.tag);
 
         boolean progress = updater.showsProgress();
@@ -625,6 +1411,9 @@ public final class Menu {
         show(upCancel, p == Updater.Phase.DOWNLOADING || p == Updater.Phase.INSTALLING);
         show(upCheck, p == Updater.Phase.IDLE || p == Updater.Phase.AVAILABLE);
         show(upRelease, updater.release() != null);
+        show(upChanges, updater.changelog() != null);
+        boolean offer = p == Updater.Phase.AVAILABLE || p == Updater.Phase.READY;
+        setText(tabs[UPDATES_TAB], offer ? TAB_NAMES[UPDATES_TAB] + " \u2022" : TAB_NAMES[UPDATES_TAB]);
     }
 
     private void openReleasePage() {
@@ -637,12 +1426,204 @@ public final class Menu {
         }
     }
 
+    /**
+     * The checked release's change list from its GitHub release notes, shown in-game as plain
+     * selectable text. The notes are unsigned and informational: nothing in them is a link.
+     */
+    private void showChangelog() {
+        Updater.Changelog c = updater.changelog();
+        if (c == null || activity.isFinishing() || activity.isDestroyed()) return;
+        if (changesDialog != null) changesDialog.dismiss();
+        AlertDialog.Builder b = new AlertDialog.Builder(activity, android.R.style.Theme_Material_Dialog_Alert);
+        Context dc = b.getContext();
+
+        TextView meta = new TextView(dc);
+        meta.setText("Build " + c.release.modBuild + " \u00B7 game " + c.release.versionName + "\n" + c.release.tag
+                + "\nFrom the GitHub release notes (informational, not part of the signed update).");
+        meta.setTextColor(0xFFBDBDBD);
+        meta.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        meta.setTextIsSelectable(true);
+
+        TextView body = new TextView(dc);
+        body.setText(c.changes != null ? c.changes : "No changelog supplied for this release.");
+        body.setTextColor(TEXT);
+        body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        body.setPadding(0, dp(10), 0, 0);
+        body.setTextIsSelectable(true);
+
+        LinearLayout content = new LinearLayout(dc);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(8), dp(24), dp(8));
+        content.addView(meta, matchWrap());
+        content.addView(body, matchWrap());
+        ScrollView scroll = new ScrollView(dc);
+        scroll.addView(content, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        changesDialog = b.setTitle("TOE3 Stormline changelog")
+                .setView(scroll)
+                .setPositiveButton("Close", null)
+                .show();
+    }
+
+    // ------------------------------------------------------------------ debug
+
+    private ScrollView buildDebug() {
+        LinearLayout content = pageContent();
+        LinearLayout segments = horizontal();
+        for (int i = 0; i < DEBUG_NAMES.length; i++) {
+            final int section = i;
+            TextView t = choiceButton(DEBUG_NAMES[i]);
+            t.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    showDebugSection(section);
+                }
+            });
+            debugTabs[i] = t;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(TOUCH_DP), 1f);
+            lp.leftMargin = lp.rightMargin = dp(2);
+            segments.addView(t, lp);
+        }
+        content.addView(segments, matchWrap());
+        for (int i = 0; i < debugTables.length; i++) {
+            debugTables[i] = new Table();
+            content.addView(debugTables[i].box, matchWrap());
+        }
+        TextView note = label(12, TEXT_DIM);
+        note.setText("Read-only: copied from the game twice a second while this screen is open. Nothing here changes the game.");
+        note.setPadding(0, dp(4), 0, dp(8));
+        content.addView(note, matchWrap());
+        content.addView(action("Copy diagnostics", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                copyDiagnostics();
+            }
+        }), rowParams());
+        return scroll(content);
+    }
+
+    /** Label/value rows created on the first render and only re-texted afterwards (no per-refresh view churn). */
+    private final class Table {
+        final LinearLayout box = vertical();
+        private final List<TextView[]> rows = new ArrayList<>();
+        private int next;
+
+        Table() {
+            box.setPadding(0, dp(8), 0, dp(4));
+        }
+
+        void begin() {
+            next = 0;
+        }
+
+        void put(String key, String value, int color) {
+            TextView[] r;
+            if (next < rows.size()) {
+                r = rows.get(next);
+            } else {
+                LinearLayout line = horizontal();
+                line.setGravity(Gravity.TOP);
+                line.setPadding(0, dp(5), 0, dp(5));
+                TextView k = label(13, TEXT_DIM);
+                TextView v = label(14, TEXT);
+                v.setGravity(Gravity.END);
+                line.addView(k, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.2f);
+                lp.leftMargin = dp(8);
+                line.addView(v, lp);
+                box.addView(line, matchWrap());
+                r = new TextView[] {k, v};
+                rows.add(r);
+            }
+            next++;
+            show((View) r[0].getParent(), true);
+            setText(r[0], key);
+            setText(r[1], value);
+            setColor(r[1], color);
+        }
+
+        void end() {
+            for (int i = next; i < rows.size(); i++) show((View) rows.get(i)[0].getParent(), false);
+        }
+
+        void appendTo(StringBuilder b) {
+            for (int i = 0; i < next; i++) {
+                TextView[] r = rows.get(i);
+                b.append(r[0].getText()).append(": ").append(r[1].getText()).append('\n');
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ view helpers
+
+    private LinearLayout pageContent() {
+        LinearLayout c = vertical();
+        c.setPadding(dp(4), dp(8), dp(4), dp(12));
+        return c;
+    }
+
+    private ScrollView scroll(View content) {
+        ScrollView s = new ScrollView(ctx);
+        s.addView(content, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return s;
+    }
+
+    private LinearLayout card() {
+        LinearLayout c = vertical();
+        c.setPadding(dp(12), dp(10), dp(12), dp(10));
+        c.setBackground(rounded(SURFACE, dp(12), 0));
+        return c;
+    }
+
+    private LinearLayout vertical() {
+        LinearLayout l = new LinearLayout(ctx);
+        l.setOrientation(LinearLayout.VERTICAL);
+        return l;
+    }
+
+    private LinearLayout horizontal() {
+        LinearLayout l = new LinearLayout(ctx);
+        l.setOrientation(LinearLayout.HORIZONTAL);
+        l.setGravity(Gravity.CENTER_VERTICAL);
+        return l;
+    }
+
     private TextView action(String text, boolean primary, View.OnClickListener click) {
         TextView t = button(text);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        t.setPadding(dp(12), 0, dp(12), 0);
-        if (primary) t.setBackground(rounded(0x66FF9800, dp(6), 0));
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setMinHeight(dp(48));
+        t.setPadding(dp(12), dp(6), dp(12), dp(6));
+        if (primary) {
+            t.setBackground(pressable(ACCENT, dp(8), 0));
+            t.setTextColor(PANEL_BG);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+        }
         t.setOnClickListener(click);
+        return t;
+    }
+
+    /** Tab or segment: gold text on a raised surface while selected. */
+    private TextView choiceButton(String text) {
+        TextView t = label(13, TEXT_DIM);
+        t.setText(text);
+        t.setGravity(Gravity.CENTER);
+        t.setSingleLine(true);
+        t.setTextColor(new ColorStateList(new int[][] {{android.R.attr.state_selected}, {}}, new int[] {ACCENT, TEXT_DIM}));
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[] {android.R.attr.state_selected}, rounded(SURFACE, dp(10), LINE));
+        states.addState(new int[0], rounded(Color.TRANSPARENT, dp(10), 0));
+        t.setBackground(new RippleDrawable(ColorStateList.valueOf(PRESSED), states, rounded(Color.WHITE, dp(10), 0)));
+        t.setClickable(true);
+        return t;
+    }
+
+    private TextView iconButton(String glyph, String description) {
+        TextView t = button(glyph);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        t.setBackground(pressable(Color.TRANSPARENT, dp(22), 0));
+        t.setContentDescription(description);
         return t;
     }
 
@@ -654,174 +1635,29 @@ public final class Menu {
     }
 
     private static void show(View v, boolean visible) {
-        v.setVisibility(visible ? View.VISIBLE : View.GONE);
+        int vis = visible ? View.VISIBLE : View.GONE;
+        if (v.getVisibility() != vis) v.setVisibility(vis);
     }
 
-    private void showFeatures() {
-        list.removeAllViews();
-        Map<String, List<Feature>> groups = new LinkedHashMap<>();
-        for (Feature f : sFeatures) {
-            List<Feature> g = groups.get(f.category);
-            if (g == null) {
-                g = new ArrayList<>();
-                groups.put(f.category, g);
-            }
-            g.add(f);
-        }
-        if (groups.isEmpty()) list.addView(hint("No features registered."));
-        for (Map.Entry<String, List<Feature>> e : groups.entrySet()) {
-            final String name = e.getKey() + " (" + e.getValue().size() + ")";
-            final LinearLayout body = new LinearLayout(ctx);
-            body.setOrientation(LinearLayout.VERTICAL);
-            for (Feature f : e.getValue()) body.addView(buildRow(f), matchWrap());
-
-            final TextView head = new TextView(ctx);
-            head.setText("\u25BC " + name);
-            head.setTextColor(ACCENT);
-            head.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            head.setTypeface(Typeface.DEFAULT_BOLD);
-            head.setPadding(0, dp(10), 0, dp(4));
-            head.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    boolean show = body.getVisibility() != View.VISIBLE;
-                    body.setVisibility(show ? View.VISIBLE : View.GONE);
-                    head.setText((show ? "\u25BC " : "\u25BA ") + name);
-                }
-            });
-            list.addView(head, matchWrap());
-            list.addView(body, matchWrap());
-        }
+    private static void setText(TextView t, CharSequence s) {
+        if (!TextUtils.equals(t.getText(), s)) t.setText(s);
     }
 
-    private View buildRow(final Feature f) {
-        LinearLayout row = new LinearLayout(ctx);
-        row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(2), 0, dp(4));
-
-        Switch sw = makeSwitch(f.label);
-        sw.setChecked(f.on);
-        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton b, boolean checked) {
-                f.on = checked;
-                save(f);
-                send(f);
-            }
-        });
-        row.addView(sw, matchWrap());
-
-        if (f.hasSlider()) row.addView(buildSlider(f), matchWrap());
-        else if (f.hasChoices()) row.addView(buildChoices(f), matchWrap());
-        return row;
-    }
-
-    private View buildSlider(final Feature f) {
-        LinearLayout line = new LinearLayout(ctx);
-        line.setOrientation(LinearLayout.HORIZONTAL);
-        line.setGravity(Gravity.CENTER_VERTICAL);
-
-        final int steps = f.steps();
-        final TextView val = new TextView(ctx);
-        val.setText(f.format(f.value));
-        val.setTextColor(ACCENT);
-        val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        val.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        val.setMinWidth(dp(56));
-
-        final SeekBar sb = new SeekBar(ctx);
-        sb.setMax(steps);
-        sb.setProgress(f.toStep(f.value)); // before the listener: no spurious set()
-        ColorStateList accent = ColorStateList.valueOf(ACCENT);
-        sb.setProgressTintList(accent);
-        sb.setThumbTintList(accent);
-        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                f.value = f.fromStep(p);
-                val.setText(f.format(f.value));
-                send(f);
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar s) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar s) {
-                save(f);
-            }
-        });
-
-        TextView minus = button("\u2212");
-        minus.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                sb.setProgress(Math.max(0, sb.getProgress() - 1));
-                save(f);
-            }
-        });
-        TextView plus = button("+");
-        plus.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                sb.setProgress(Math.min(steps, sb.getProgress() + 1));
-                save(f);
-            }
-        });
-
-        line.addView(minus, new LinearLayout.LayoutParams(dp(32), dp(32)));
-        line.addView(sb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        line.addView(plus, new LinearLayout.LayoutParams(dp(32), dp(32)));
-        line.addView(val, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        return line;
-    }
-
-    private View buildChoices(final Feature f) {
-        HorizontalScrollView hs = new HorizontalScrollView(ctx);
-        hs.setHorizontalScrollBarEnabled(false);
-        RadioGroup group = new RadioGroup(ctx);
-        group.setOrientation(LinearLayout.HORIZONTAL);
-        ColorStateList tint = new ColorStateList(
-                new int[][] {{android.R.attr.state_checked}, {}}, new int[] {ACCENT, TEXT_DIM});
-        int selected = (int) f.value;
-        int checkedId = View.NO_ID;
-        for (int i = 0; i < f.choices.length; i++) {
-            RadioButton rb = new RadioButton(ctx);
-            rb.setId(View.generateViewId());
-            rb.setTag(i);
-            rb.setText(f.choices[i]);
-            rb.setTextColor(TEXT);
-            rb.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            rb.setButtonTintList(tint);
-            rb.setPadding(0, 0, dp(10), 0);
-            group.addView(rb);
-            if (i == selected) checkedId = rb.getId();
-        }
-        if (checkedId != View.NO_ID) group.check(checkedId); // before the listener
-        group.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(RadioGroup g, int id) {
-                View rb = g.findViewById(id);
-                if (rb == null) return;
-                f.value = (Integer) rb.getTag();
-                save(f);
-                send(f);
-            }
-        });
-        hs.addView(group);
-        return hs;
+    private static void setColor(TextView t, int color) {
+        if (t.getCurrentTextColor() != color) t.setTextColor(color);
     }
 
     private Switch makeSwitch(String label) {
         Switch s = new Switch(ctx);
         s.setText(label);
         s.setTextColor(TEXT);
-        s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        s.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        s.setMinHeight(dp(48));
         s.setPadding(0, dp(4), 0, dp(4));
-        s.setSwitchPadding(dp(8));
+        s.setSwitchPadding(dp(12));
         int[][] states = {{android.R.attr.state_checked}, {}};
-        s.setThumbTintList(new ColorStateList(states, new int[] {ACCENT, 0xFFBDBDBD}));
-        s.setTrackTintList(new ColorStateList(states, new int[] {0x99FF9800, 0x55FFFFFF}));
+        s.setThumbTintList(new ColorStateList(states, new int[] {ACCENT, TEXT_DIM}));
+        s.setTrackTintList(new ColorStateList(states, new int[] {0x99FFD884, 0x55B4C0CD}));
         return s;
     }
 
@@ -831,7 +1667,7 @@ public final class Menu {
         t.setTextColor(TEXT);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(rounded(0x33FFFFFF, dp(6), 0));
+        t.setBackground(pressable(SURFACE, dp(8), LINE));
         t.setClickable(true);
         return t;
     }
@@ -841,17 +1677,16 @@ public final class Menu {
         t.setText(text);
         t.setTextColor(TEXT_DIM);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        t.setTypeface(Typeface.DEFAULT, Typeface.ITALIC);
         t.setPadding(0, dp(8), 0, dp(8));
         return t;
     }
 
     private View divider() {
         View v = new View(ctx);
-        v.setBackgroundColor(0x33FFFFFF);
+        v.setBackgroundColor(LINE);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
         lp.topMargin = dp(4);
-        lp.bottomMargin = dp(2);
+        lp.bottomMargin = dp(4);
         v.setLayoutParams(lp);
         return v;
     }
@@ -864,29 +1699,49 @@ public final class Menu {
         return d;
     }
 
+    /** Rounded background with the platform ripple as touch feedback. */
+    private Drawable pressable(int color, int radius, int strokeColor) {
+        return new RippleDrawable(ColorStateList.valueOf(PRESSED), rounded(color, radius, strokeColor),
+                rounded(Color.WHITE, radius, 0));
+    }
+
     private static LinearLayout.LayoutParams matchWrap() {
         return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private static FrameLayout.LayoutParams matchMatch() {
+        return new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
+    private LinearLayout.LayoutParams rowParams() {
+        LinearLayout.LayoutParams lp = matchWrap();
+        lp.bottomMargin = dp(8);
+        return lp;
+    }
+
+    private LinearLayout.LayoutParams cardParams() {
+        LinearLayout.LayoutParams lp = matchWrap();
+        lp.bottomMargin = dp(12);
+        return lp;
     }
 
     private int dp(float v) {
         return Math.round(v * density);
     }
 
-    /** Vertical LinearLayout whose height is capped (panel = max 80% of the screen). */
-    private static final class MaxHeightLayout extends LinearLayout {
-        int maxHeight;
+    /** Vertical LinearLayout that always takes {@link #fixedHeight} (capped by its parent): the tab bar never jumps. */
+    private static final class PanelLayout extends LinearLayout {
+        int fixedHeight;
 
-        MaxHeightLayout(Context c) {
+        PanelLayout(Context c) {
             super(c);
         }
 
         @Override
         protected void onMeasure(int widthSpec, int heightSpec) {
-            int mode = MeasureSpec.getMode(heightSpec);
-            if (mode == MeasureSpec.UNSPECIFIED || MeasureSpec.getSize(heightSpec) > maxHeight) {
-                heightSpec = MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST);
-            }
-            super.onMeasure(widthSpec, heightSpec);
+            int h = fixedHeight;
+            if (MeasureSpec.getMode(heightSpec) != MeasureSpec.UNSPECIFIED) h = Math.min(h, MeasureSpec.getSize(heightSpec));
+            super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY));
         }
     }
 }

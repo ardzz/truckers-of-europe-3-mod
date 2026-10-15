@@ -195,7 +195,9 @@ jobs:
       - **Driver and jobs:** fully rested fatigue value; no delivery penalties; income and XP multipliers up to 20×; rewarded-ad actions without the ad
       - **Shopping and travel:** free trucks, parts, interiors, trailers and garages; free ferry, tolls and towing
 
-      Money, gold, wash tickets, level, rain and rain-dirt prevention start enabled; every other control starts off. Settings persist between launches, and the **Mods enabled** switch turns every feature off together. Disabling a control does not undo purchases, rewards or saved progress.
+      Money, gold, wash tickets, level, rain and rain-dirt prevention start enabled; every other control starts off. Settings persist between launches, and the **Mods** switch turns gameplay changes off together. Disabling a control does not undo purchases, rewards or saved progress.
+
+      The panel uses focused **Home**, mod-category, **World**, **Updates** and **Debug** screens. World shows requested versus actual weather and transition progress. Debug is a read-only viewer for cached Runtime, Weather and Truck data, with sample age and unavailable/stale states.
 
       Not every control has been tested in gameplay. CI checks packaging, signatures and checksums; it does not play the game.
 
@@ -204,6 +206,8 @@ jobs:
       The launcher name is **TOE3 Stormline**, with a gold-truck **MOD** icon. The package name and signing key stay the same; this is an update to the existing mod, not a separate clone.
 
       After installing an OTA-enabled build once, open the mod menu's **Updates** section to check GitHub Releases, download the complete APK set and request installation. Files are checked against their hashes and the installed signing certificate. Android still asks you to confirm; on Android 8+ it may also ask you to allow installs from this source. There is no silent install and no root requirement.
+
+      Press **Changelog** after checking to read the automatically generated commit-message changes inside the game, without opening GitHub. **View release** remains an optional separate link. Release text is informational and is not used to authorize APK installation.
 
       Older mod builds without the updater need the manual installation below once. OTA downloads the full split set, not a small hot patch.
 

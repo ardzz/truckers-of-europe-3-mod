@@ -5,7 +5,8 @@
 Compiles UpdatePolicy with the app's -Xlint:all -Werror flags against the bare Java 8 API (which
 also proves the policy has no Android dependency), then runs tests/ota/com/toemod/UpdatePolicyTest:
 malformed/hostile update.json and build.json, rollback and re-offer rules, asset URLs and redirect
-hosts, size/SHA-256 enforcement, cache corruption and the signed identity inside every APK.
+hosts, size/SHA-256 enforcement, cache corruption, the signed identity inside every APK and the
+bounded plain-text "Changes in this build" list the in-game Changelog dialog shows.
 PackageManager, PackageInstaller and HTTPS behaviour are covered by the on-device smoke test.
 """
 
