@@ -80,6 +80,10 @@ GitHub Actions checks APKPure daily at **02:27 UTC**, on mod/CI changes on `main
 can also be requested. Completed releases are skipped. Releases contain the signed APK set, `SHA256SUMS`,
 the source manifest and a compatibility report. Uploads finish in a draft before publication.
 
+Verified end-to-end: [fetch/build/sign/public release](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677161415)
+and [manual rerun skipping an existing release](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238).
+The offline suite covers 111 download, identity, compatibility and incomplete-package boundary cases.
+
 CI verifies the package, every APK signature against the original developer certificate, matching split
 versions, the required `UnityDataAssetPack` and its core game data, and the reviewed `libil2cpp.so`, IL2CPP
 metadata and Unity fingerprints in `ci/compatibility.json`. Standalone APKs without this asset split are rejected.
