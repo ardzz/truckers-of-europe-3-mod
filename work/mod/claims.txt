@@ -1,0 +1,16 @@
+# Function-entry hook claims and byte-patch ranges. One line per claim:
+#   <vaddr> <entry|patch:len> <module> <ClassName::Method>
+# Before inline-hooking a function ENTRY or byte-patching, grep this file.
+# If the function entry is already claimed by another module, do NOT hook it;
+# use a byte patch inside your own code path or hook a different callee.
+0x1b60978 entry economy Prefs::get_Balance
+0x1b60ab8 entry economy Prefs::get_Gold
+0x1b61de4 entry economy Prefs::get_WashTickets
+0x1b60228 entry economy Prefs::get_Level
+0x1b6035c entry economy Prefs::get_Xp
+0x1b60d34 entry economy Prefs::get_AdFree
+0x1b60e70 entry economy Prefs::get_UnlockTrailers
+0x19b44ec patch:4 dirt TruckController::Update (rained-drying branch)
+0x19b45a8 patch:4 dirt TruckController::Update (rain dirt fadd)
+0x199ccf4 patch:4 dirt TrailerController::Update (rained-drying branch)
+0x199cdb0 patch:4 dirt TrailerController::Update (rain dirt fadd)

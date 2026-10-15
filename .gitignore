@@ -1,0 +1,31 @@
+# Game files (copyrighted) — pull your own copy from your device
+/com.WandaSoftware.TruckersofEurope3/
+/backup/
+/build/
+*.apk
+*.apks
+*.ab
+*.idsig
+
+# Extracted game binaries, metadata and decompiled dumps
+/work/lib/
+/work/assets/
+/work/cs/
+/work/AndroidManifest.xml
+/work/methods.json
+/work/*.so
+
+# Downloaded tools and build outputs
+/work/cpp2il
+/work/mod/out/
+/work/mod/tools/
+/work/mod/obj/
+/work/mod/libs/
+__pycache__/
+
+# Secrets
+*.keystore
+*.jks
+
+# Scratch
+*.png
