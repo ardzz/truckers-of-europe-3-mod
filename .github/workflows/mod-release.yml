@@ -1,0 +1,199 @@
+name: Mod build and release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ci/**"
+      - "work/mod/**"
+      - ".github/workflows/mod-release.yml"
+  pull_request:
+    paths:
+      - "ci/**"
+      - "work/mod/**"
+      - ".github/workflows/mod-release.yml"
+  schedule:
+    - cron: "27 2 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact upstream version (blank = latest)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mod-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Test download and compatibility boundaries
+        run: |
+          python3 -m unittest discover -s ci -p 'test_*.py' -v
+          bash -n work/mod/build_native.sh work/mod/build_base.sh work/mod/build_release.sh
+
+  release:
+    needs: checks
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      BUILD_TOOLS: /usr/local/lib/android/sdk/build-tools/37.0.0
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/30.0.16248370
+      ANDROID_JAR: /usr/local/lib/android/sdk/platforms/android-31/android.jar
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve upstream and skip completed releases
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          args=()
+          if [[ -n "$REQUESTED_VERSION" ]]; then args+=(--version "$REQUESTED_VERSION"); fi
+          python3 ci/fetch_apk.py --list "${args[@]}" > "$RUNNER_TEMP/versions.json"
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          versions = json.loads((Path(os.environ['RUNNER_TEMP']) / 'versions.json').read_text())
+          latest = max(versions, key=lambda v: int(v['version_code']))
+          name, code = latest['version_name'], int(latest['version_code'])
+          if not re.fullmatch(r'[0-9]+(?:[.][0-9A-Za-z_-]+)*', name) or code <= 0:
+              raise SystemExit('Unsafe upstream version metadata')
+          revision = subprocess.check_output(['git', 'log', '-1', '--format=%h', '--', 'work/mod', 'ci', '.github/workflows/mod-release.yml'], text=True).strip()
+          tag = f'toe3-v{name}-b{code}-mod-{revision}'
+          response = Path(os.environ['RUNNER_TEMP']) / 'existing-release.json'
+          request = subprocess.run(['curl', '--silent', '--show-error', '--connect-timeout', '15', '--max-time', '60', '--output', str(response), '--write-out', '%{http_code}', '--header', f'Authorization: Bearer {os.environ["GH_TOKEN"]}', '--header', 'Accept: application/vnd.github+json', f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/releases/tags/{tag}'], capture_output=True, text=True, check=True)
+          status = request.stdout
+          if status not in ('200', '404'):
+              raise SystemExit(f'GitHub release lookup failed: HTTP {status}')
+          exists = status == '200'
+          published = exists and not json.loads(response.read_text())['draft']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'version={name}\ncode={code}\ntag={tag}\nexists={str(exists).lower()}\nbuild={str(not published).lower()}\n')
+          print(f'Upstream: {name} ({code}); release {tag}; '+('already published' if published else 'building'))
+          PY
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        if: steps.upstream.outputs.build == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install pinned build tools
+        if: steps.upstream.outputs.build == 'true'
+        run: |
+          sdkmanager 'platforms;android-31' 'build-tools;37.0.0' 'ndk;30.0.16248370'
+          mkdir -p "$RUNNER_TEMP/tools"
+          curl --fail --location --silent --show-error --retry 2 \
+            'https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar' \
+            -o "$RUNNER_TEMP/tools/apktool.jar"
+          printf '66cf4524a4a45a7f56567d08b2c9b6ec237bcdd78cee69fd4a59c8a0243aeafa  %s\n' "$RUNNER_TEMP/tools/apktool.jar" | sha256sum --check
+          printf '#!/usr/bin/env bash\nexec java -Xmx2g -jar "%s" "$@"\n' "$RUNNER_TEMP/tools/apktool.jar" > "$RUNNER_TEMP/tools/apktool"
+          chmod +x "$RUNNER_TEMP/tools/apktool"
+      - name: Download genuine arm64 APK set
+        if: steps.upstream.outputs.build == 'true'
+        env:
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+        run: python3 ci/fetch_apk.py --version "$UPSTREAM_VERSION" --output "$RUNNER_TEMP/upstream"
+      - name: Refuse incompatible native game code
+        if: steps.upstream.outputs.build == 'true'
+        env:
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+          UPSTREAM_CODE: ${{ steps.upstream.outputs.code }}
+        run: |
+          python3 ci/check_apks.py "$RUNNER_TEMP/upstream" --build-tools "$BUILD_TOOLS" > "$RUNNER_TEMP/compatibility.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads((Path(os.environ['RUNNER_TEMP'])/'compatibility.json').read_text())
+          if report['version_name'] != os.environ['UPSTREAM_VERSION'] or int(report['version_code']) != int(os.environ['UPSTREAM_CODE']):
+              raise SystemExit('Downloaded APK version differs from selected upstream version')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write('## Compatibility gate\n\nValidated package, original signer, split set, native code and metadata.\n\n')
+              out.write('```json\n'+json.dumps(report, indent=2)+'\n```\n')
+          PY
+      - name: Build and sign with existing install identity
+        if: steps.upstream.outputs.build == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KS_PASS }}
+          KS_ALIAS: ${{ secrets.KS_ALIAS }}
+        run: |
+          [[ -n "$KEYSTORE_B64" && -n "$KS_PASS" && -n "$KS_ALIAS" ]] || { echo 'Signing secrets missing; refusing to generate a different key' >&2; exit 1; }
+          umask 077
+          export KEYSTORE="$RUNNER_TEMP/mod.keystore"
+          export PULLED_DIR="$RUNNER_TEMP/upstream"
+          export APKTOOL="$RUNNER_TEMP/tools/apktool"
+          trap 'rm -f "$KEYSTORE"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+          bash work/mod/build_release.sh
+      - name: Prepare release checksums and notes
+        if: steps.upstream.outputs.build == 'true'
+        env:
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+          UPSTREAM_CODE: ${{ steps.upstream.outputs.code }}
+        run: |
+          cp "$RUNNER_TEMP/compatibility.json" work/mod/out/release/compatibility.json
+          cp "$RUNNER_TEMP/upstream/source.json" work/mod/out/release/source.json
+          (cd work/mod/out/release && sha256sum -- *.apk compatibility.json source.json > SHA256SUMS)
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          version, code = os.environ['UPSTREAM_VERSION'], os.environ['UPSTREAM_CODE']
+          text = f'''# Truckers of Europe 3 {version} ({code}) — mod menu
+
+          Source commit: {os.environ['GITHUB_SHA']}
+          Upstream source: APKPure; original signatures verified before modification.
+          Compatibility: reviewed native code and IL2CPP metadata fingerprints matched.
+          CI verifies packaging, signatures and checksums, not Android gameplay.
+
+          Download every APK asset in this release, verify SHA256SUMS, then install together:
+          ```sh
+          adb install-multiple -r ./*.apk
+          ```
+          Uses the existing mod signing key. Updating the mod preserves its local data.
+          Switching from the store build still requires uninstalling it first (local save loss).
+          Google Play Games login/cloud saves do not work with the re-signed APK.
+          '''
+          (Path(os.environ['RUNNER_TEMP'])/'release-notes.md').write_text(text)
+          PY
+      - name: Publish complete public release
+        if: steps.upstream.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
+          RELEASE_EXISTS: ${{ steps.upstream.outputs.exists }}
+          UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          if [[ "$RELEASE_EXISTS" != true ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --draft --title "TOE3 $UPSTREAM_VERSION — mod menu" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            work/mod/out/release/*.apk work/mod/out/release/SHA256SUMS \
+            work/mod/out/release/compatibility.json work/mod/out/release/source.json
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+      - name: Explain release failure
+        if: failure()
+        run: |
+          printf '%s\n' '## No release published' '' \
+            'Inspect the failing step. Changed native game code/metadata requires a reviewed mod port before release; never bypass the compatibility gate.' >> "$GITHUB_STEP_SUMMARY"

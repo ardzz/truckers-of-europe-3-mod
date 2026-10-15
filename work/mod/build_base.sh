@@ -7,7 +7,9 @@
 # resources kept raw) -> call Menu.start(this) right after super.onCreate() in
 # UnityPlayerActivity -> menu dex added as the next raw classesN.dex -> apktool b -> verify.
 #
-# Overrides: SRC_APK, APKTOOL, ANDROID_HOME/ANDROID_SDK_ROOT, KEEP_BUILD=1 (keep decoded tree).
+# Overrides: SRC_APK, APKTOOL (path or command, default: apktool on PATH), BUILD_TOOLS (default: newest
+# build-tools), ANDROID_JAR (default: newest platforms/*/android.jar), ANDROID_HOME/ANDROID_SDK_ROOT,
+# KEEP_BUILD=1 (keep decoded tree).
 set -euo pipefail
 
 MOD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,8 +20,10 @@ OUT_APK="$OUT_DIR/base-unsigned.apk"
 BUILD="$OUT_DIR/build_base"
 
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
-BT="$SDK/build-tools/37.0.0"
-APKTOOL="${APKTOOL:-$HOME/.local/bin/apktool}"
+BT="${BUILD_TOOLS:-$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n 1 || true)}"
+ANDROID_JAR="${ANDROID_JAR:-$(find "$SDK/platforms" -mindepth 2 -maxdepth 2 -name android.jar 2>/dev/null | sort -V | tail -n 1 || true)}"
+APKTOOL_REQ="${APKTOOL:-apktool}"
+APKTOOL="$(command -v "$APKTOOL_REQ" || true)"
 
 die() { echo "build_base: ERROR: $*" >&2; exit 1; }
 log() { printf '\n== %s\n' "$*"; }
@@ -29,12 +33,16 @@ pick() {
     die "none of these exist: $*"
 }
 
-ANDROID_JAR="$(pick "$SDK/platforms/android-36.1/android.jar" "$SDK/platforms/android-31/android.jar")"
+[[ -n $BT && -d $BT ]] || die "Android build-tools not found (set BUILD_TOOLS or ANDROID_HOME)"
+[[ -f $ANDROID_JAR ]] || die "android.jar not found (set ANDROID_JAR or install a platform under $SDK/platforms)"
 D8="$(pick "$BT/d8" "$SDK/cmdline-tools/latest/bin/d8")"
 AAPT2="$(pick "$BT/aapt2")"
 DEXDUMP="$(pick "$BT/dexdump")"
-[[ -x $APKTOOL ]] || die "apktool not found at $APKTOOL"
+[[ -n $APKTOOL && -x $APKTOOL ]] || die "apktool not found: $APKTOOL_REQ (set APKTOOL or put apktool on PATH)"
 [[ -f $SRC_APK ]] || die "source APK not found: $SRC_APK"
+case "$(realpath -m "$SRC_APK")" in
+    "$(realpath -m "$OUT_DIR")"/*) die "SRC_APK must not be inside $OUT_DIR (build output)" ;;
+esac
 command -v javac >/dev/null || die "javac not on PATH"
 command -v unzip >/dev/null || die "unzip not on PATH"
 

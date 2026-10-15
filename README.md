@@ -62,7 +62,9 @@ Requirements: Android SDK build-tools, NDK (r27+), JDK, `apktool`, Python 3, `ad
 adb shell pm path com.WandaSoftware.TruckersofEurope3   # then adb pull each path
 # 2. (optional, for RE) extract libil2cpp.so + global-metadata.dat into work/ and run Cpp2IL:
 #    cpp2il --use-processor attributeinjector --output-as diffable-cs --output-to work/cs ...
-# 3. build everything (creates build/mod.keystore if missing; override with KEYSTORE/KS_PASS/KS_ALIAS)
+# 3. use an existing signing key; a missing key fails instead of changing the install identity
+export KEYSTORE="$PWD/build/mod.keystore" KS_ALIAS=mod
+read -r -s -p 'Keystore password: ' KS_PASS; export KS_PASS; echo
 bash work/mod/build_release.sh
 # 4. first time: uninstall the store version (signature differs; local save is lost)
 adb install-multiple -r work/mod/out/release/*.apk
@@ -70,6 +72,43 @@ adb install-multiple -r work/mod/out/release/*.apk
 
 Re-signing breaks Google Play Games sign-in / cloud save (OAuth client is bound to the developer's certificate;
 this applies to microG too).
+
+## Automated builds
+
+GitHub Actions checks APKPure daily at **02:27 UTC**, on mod/CI changes on `main`, or through
+**Actions → Mod build and release → Run workflow**. Leave `version` blank for latest; an exact version
+can also be requested. Completed releases are skipped. Releases contain the signed APK set, `SHA256SUMS`,
+the source manifest and a compatibility report. Uploads finish in a draft before publication.
+
+CI verifies the package, every APK signature against the original developer certificate, matching split
+versions, the required `UnityDataAssetPack` and its core game data, and the reviewed `libil2cpp.so`, IL2CPP
+metadata and Unity fingerprints in `ci/compatibility.json`. Standalone APKs without this asset split are rejected.
+**Unknown native code fails the build; there is no guessed auto-port.** A game update that changes those
+files needs a reviewed address/field-layout port and an updated baseline. Editing just the baseline hashes
+does not port the mod. CI packaging checks do not replace gameplay testing on an arm64 Android device.
+
+Repository Actions secrets:
+
+| Secret | Purpose |
+|---|---|
+| `KEYSTORE_B64` | Base64 of the existing mod signing keystore |
+| `KS_PASS` | Keystore and private-key password |
+| `KS_ALIAS` | Signing alias |
+
+The scheduled workflow never creates a replacement key. PR checks have read-only permissions and cannot
+access signing secrets. Releases are public, including APK assets; source downloads, extracted game files,
+build directories and signing keys stay out of Git. APKPure is a third-party source; the original signing
+certificate, rather than the listing's authenticity claim, is the trust anchor.
+
+Local fetch and checks:
+
+```sh
+python3 ci/fetch_apk.py --list
+python3 ci/fetch_apk.py --output build/upstream
+python3 ci/check_apks.py build/upstream
+PULLED_DIR="$PWD/build/upstream" bash work/mod/build_release.sh
+python3 -m unittest discover -s ci -p 'test_*.py' -v
+```
 
 ## Disclaimer
 

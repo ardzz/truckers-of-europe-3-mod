@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "package": "com.WandaSoftware.TruckersofEurope3",
+  "signer_cert_sha1": "8f9bb7c7e45319da1e8f70199ada050bc09ae749",
+  "signer_cert_sha256": "5c388af39778ed7a1aebfdf425719adc5f4e2accf82407cc0085f10a8addc23a",
+  "reviewed_build": {
+    "version_name": "0.7.64",
+    "version_code": 193
+  },
+  "pinned_entries": {
+    "lib/arm64-v8a/libil2cpp.so": {
+      "sha256": "3b3a67f577d4e34e10e85e8980d05ca14c10817b320aedb2372a58d7538f712c",
+      "size": 63948512
+    },
+    "assets/bin/Data/Managed/Metadata/global-metadata.dat": {
+      "sha256": "e520a10ddc7f0f698fb46ddd6f7b6560199de70522bf2017f7cfd3ba59ec11d3",
+      "size": 11259412
+    },
+    "lib/arm64-v8a/libunity.so": {
+      "sha256": "974a9b859f8f3cde7a14c8fe8973f3300b3b7634d835d2686798431c99013884",
+      "size": 20848296
+    }
+  },
+  "required_splits": {
+    "UnityDataAssetPack": [
+      "assets/aa/catalog.bundle",
+      "assets/aa/settings.json",
+      "assets/bin/Data/level1",
+      "assets/bin/Data/level2.split0",
+      "assets/bin/Data/level3.split0",
+      "assets/bin/Data/sharedassets1.assets.split0",
+      "assets/bin/Data/sharedassets2.assets.split0",
+      "assets/bin/Data/sharedassets3.assets.split0"
+    ]
+  },
+  "notes": [
+    "Hashes were taken from the original Play-signed split set (base.apk, split_config.arm64_v8a.apk) of 0.7.64 / versionCode 193.",
+    "libil2cpp.so: every hook address and byte patch in work/mod/src is hard-coded for this exact file.",
+    "global-metadata.dat: the IL2CPP type/method metadata that the reviewed addresses and field offsets were derived from.",
+    "libunity.so: pinned fail-closed; the hooked IL2CPP code calls into the engine, so an engine change without a libil2cpp change is not assumed to be safe.",
+    "A different version is accepted only if all pinned entries are byte-identical; there is no automatic re-mapping.",
+    "required_splits: taken from the original split_UnityDataAssetPack.apk (scenes 1-3, their shared assets, the Addressables catalog). The game ships these only in that asset pack, so a set without the split, or a standalone APK, is rejected even if its native code matches."
+  ]
+}
