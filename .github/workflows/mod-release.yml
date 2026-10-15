@@ -100,7 +100,7 @@ jobs:
       - name: Install pinned build tools
         if: steps.upstream.outputs.build == 'true'
         run: |
-          sdkmanager 'platforms;android-31' 'build-tools;37.0.0' 'ndk;30.0.16248370'
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" 'platforms;android-31' 'build-tools;37.0.0' 'ndk;30.0.16248370'
           mkdir -p "$RUNNER_TEMP/tools"
           curl --fail --location --silent --show-error --retry 2 \
             'https://github.com/iBotPeaches/Apktool/releases/download/v2.12.1/apktool_2.12.1.jar' \
