@@ -234,7 +234,9 @@ The offline suite covers download parsing, redirect boundaries, package identity
 python3 -m unittest discover -s ci -p 'test_*.py' -v
 ```
 
-The [integrated release run](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38757531878) passed the 148-test suite, fetched the genuine split set, checked compatibility, compiled the focused-screen/native-diagnostics build, signed it and published mod build 7. A previous [manual rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238) verified the existing-release skip path.
+The [v0.1.0 release run](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38766505229/attempts/1) fetched the genuine split set, checked compatibility, compiled and signed the APKs, and published the semantic release. The local host suite passed 161 tests. A [rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38766505229/attempts/2) loaded the published semantic manifest and skipped download, build and publication for unchanged inputs.
+
+Untouched build 6 and build 7 updater policies were compiled and exercised against the actual `v0.1.0` release metadata and downloaded base APK identity. Both offered the update and rejected mixed legacy APK identities; build 7's existing changelog reader received the detailed Added and Fixed notes. The published base APK's SHA-256 and signing certificate were independently checked.
 
 Device smoke coverage on the Huawei Android 12 tablet includes focused navigation, live Runtime/Weather/Truck readings, missing weather data outside the driving scene, the in-game changelog, collapse/reopen and activity resume. A single Rainy selection during Foggy weather reached actual Rainy without another toggle; the existing fade and ramp took about four minutes. A successful OTA installation was also confirmed on this tablet.
 

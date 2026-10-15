@@ -6,6 +6,8 @@ Mod versions use **Semantic Versioning**, starting at `v0.1.0`, independently of
 
 ## [v0.1.0] - 2026-10-15
 
+Game 0.7.64 (build 193), CI build 8.
+
 ### Added
 
 - Independent semantic mod versions in release tags, release titles and the in-game version display. Game versions and CI build numbers remain separate.
@@ -20,6 +22,12 @@ Mod versions use **Semantic Versioning**, starting at `v0.1.0`, independently of
 
 - OTA keeps schema 1 and its exact fields. Semantic versions are derived from the tag rather than adding a field that older updaters would reject.
 - The package, signing identity, split inventory and numeric rollback checks are unchanged. Historical release tags and APK assets are not rewritten.
+
+### Verified
+
+- The 161-test host suite, Java compilation and the [signed release pipeline](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38766505229/attempts/1) passed.
+- Unmodified build 6 and build 7 updater policies accepted the published `v0.1.0` manifest and the downloaded base APK's embedded identity, while still rejecting a mixed legacy APK identity. Build 7's existing reader received both Added and Fixed notes.
+- A [release rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38766505229/attempts/2) loaded the published semantic manifest and skipped downloading, building and publishing unchanged inputs.
 
 ## [toe3-v0.7.64-b193-mod-7f0d995] - 2026-10-15
 
