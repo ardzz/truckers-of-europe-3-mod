@@ -476,7 +476,7 @@ public final class Menu {
         LinearLayout titleBox = new LinearLayout(ctx);
         titleBox.setOrientation(LinearLayout.VERTICAL);
         TextView title = new TextView(ctx);
-        title.setText("TOE3 Mod Menu");
+        title.setText("TOE3 Stormline");
         title.setTextColor(ACCENT);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         title.setTypeface(Typeface.DEFAULT_BOLD);

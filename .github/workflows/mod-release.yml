@@ -74,14 +74,16 @@ jobs:
       if [[ -n "$REQUESTED_VERSION" ]]; then args+=(--version "$REQUESTED_VERSION"); fi
       python3 ci/fetch_apk.py --list "${args[@]}" > "$RUNNER_TEMP/versions.json"
       python3 - <<'PY'
-      import json, os, re, subprocess
+      import json, os, re, subprocess, sys
       from pathlib import Path
+      sys.path.insert(0, 'ci')
+      from release_changes import RELEASE_PATHS
       versions = json.loads((Path(os.environ['RUNNER_TEMP']) / 'versions.json').read_text())
       latest = max(versions, key=lambda v: int(v['version_code']))
       name, code = latest['version_name'], int(latest['version_code'])
       if not re.fullmatch(r'[0-9]+(?:[.][0-9A-Za-z_-]+)*', name) or code <= 0:
           raise SystemExit('Unsafe upstream version metadata')
-      revision = subprocess.check_output(['git', 'log', '-1', '--format=%h', '--', 'work/mod', 'ci', 'assets/artwork/launcher-icon.png', '.github/workflows/mod-release.yml'], text=True).strip()
+      revision = subprocess.check_output(['git', 'log', '-1', '--format=%h', '--', *RELEASE_PATHS], text=True).strip()
       tag = f'toe3-v{name}-b{code}-mod-{revision}'
       response = Path(os.environ['RUNNER_TEMP']) / 'existing-release.json'
       request = subprocess.run(['curl', '--silent', '--show-error', '--connect-timeout', '15', '--max-time', '60', '--output', str(response), '--write-out', '%{http_code}', '--header', f'Authorization: Bearer {os.environ["GH_TOKEN"]}', '--header', 'Accept: application/vnd.github+json', f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/releases/tags/{tag}'], capture_output=True, text=True, check=True)
@@ -154,6 +156,8 @@ jobs:
    - name: Prepare release checksums and notes
      if: steps.upstream.outputs.build == 'true'
      env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
       UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
       UPSTREAM_CODE: ${{ steps.upstream.outputs.code }}
      run: |
@@ -161,16 +165,26 @@ jobs:
       cp "$RUNNER_TEMP/upstream/source.json" work/mod/out/release/source.json
       python3 ci/update_manifest.py release --release-dir work/mod/out/release --report "$RUNNER_TEMP/compatibility.json" --build-tools "$BUILD_TOOLS"
       (cd work/mod/out/release && sha256sum -- *.apk compatibility.json source.json update.json > SHA256SUMS)
+      gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases" > "$RUNNER_TEMP/releases.json"
+      python3 ci/release_changes.py --repository "$GITHUB_REPOSITORY" --head "$GITHUB_SHA" --current-tag "$RELEASE_TAG" \
+        --releases "$RUNNER_TEMP/releases.json" --output "$RUNNER_TEMP/changes.md"
       python3 - <<'PY'
       import os
       from pathlib import Path
       version, code = os.environ['UPSTREAM_VERSION'], os.environ['UPSTREAM_CODE']
       repo, commit = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
-      text = f'''![Truckers of Europe 3 Runtime Mod Menu artwork](https://raw.githubusercontent.com/{repo}/{commit}/assets/artwork/mod-hero.webp)
+      changes = (Path(os.environ['RUNNER_TEMP'])/'changes.md').read_text().strip()
+      text = f'''![TOE3 Stormline artwork featuring a gold tanker truck on a rainy motorway](https://raw.githubusercontent.com/{repo}/{commit}/assets/artwork/mod-hero.webp)
 
       _Promotional artwork, not an in-game screenshot._
 
-      An unofficial, experimental mod for **Truckers of Europe 3 {version}** (build {code}) on Android arm64. A draggable in-game menu changes money, weather, truck, job and shop settings while you play. No root or "display over other apps" permission is required.
+      **TOE3 Stormline** is an unofficial, experimental mod for **Truckers of Europe 3 {version}** (build {code}) on Android arm64. A draggable in-game menu changes money, weather, truck, job and shop settings while you play. No root or "display over other apps" permission is required.
+
+      ### Changes in this build
+
+      {changes}
+
+      Curated release history: [CHANGELOG.md](https://github.com/{repo}/blob/main/CHANGELOG.md)
 
       ### Menu controls
 
@@ -187,7 +201,7 @@ jobs:
 
       ### Updates inside the game
 
-      The launcher name is **TOE3 Mod Menu**, with a gold-truck **MOD** icon. The package name and signing key stay the same; this is an update to the existing mod, not a separate clone.
+      The launcher name is **TOE3 Stormline**, with a gold-truck **MOD** icon. The package name and signing key stay the same; this is an update to the existing mod, not a separate clone.
 
       After installing an OTA-enabled build once, open the mod menu's **Updates** section to check GitHub Releases, download the complete APK set and request installation. Files are checked against their hashes and the installed signing certificate. Android still asks you to confirm; on Android 8+ it may also ask you to allow installs from this source. There is no silent install and no root requirement.
 
@@ -228,17 +242,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ steps.upstream.outputs.tag }}
       RELEASE_EXISTS: ${{ steps.upstream.outputs.exists }}
-      UPSTREAM_VERSION: ${{ steps.upstream.outputs.version }}
+      RELEASE_TITLE: "TOE3 Stormline ${{ steps.upstream.outputs.version }} | mod build ${{ github.run_number }}"
      run: |
       if [[ "$RELEASE_EXISTS" != true ]]; then
         gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-          --draft --title "TOE3 $UPSTREAM_VERSION | Runtime Mod Menu" --notes-file "$RUNNER_TEMP/release-notes.md"
+          --draft --title "$RELEASE_TITLE" --notes-file "$RUNNER_TEMP/release-notes.md"
       fi
       gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
         work/mod/out/release/*.apk work/mod/out/release/SHA256SUMS \
         work/mod/out/release/compatibility.json work/mod/out/release/source.json work/mod/out/release/update.json
       gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false \
-        --title "TOE3 $UPSTREAM_VERSION | Runtime Mod Menu" --notes-file "$RUNNER_TEMP/release-notes.md"
+        --title "$RELEASE_TITLE" --notes-file "$RUNNER_TEMP/release-notes.md"
    - name: Explain release failure
      if: failure()
      run: |

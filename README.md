@@ -1,8 +1,8 @@
 <div align="center">
 
-<h1>Truckers of Europe 3<br>Runtime Mod Menu</h1>
+<h1>TOE3 Stormline</h1>
 
-<p><img src="assets/artwork/mod-hero.webp" alt="Truckers of Europe 3 Mod Menu artwork featuring a gold tanker truck on a rainy motorway" width="1200"></p>
+<p><img src="assets/artwork/mod-hero.webp" alt="TOE3 Stormline artwork featuring a gold tanker truck on a rainy motorway" width="1200"></p>
 
 <p><sub>Unofficial mod artwork, not a gameplay screenshot.</sub></p>
 
@@ -18,11 +18,12 @@
   · <a href="#how-it-works">How it works</a>
   · <a href="#in-app-updates">OTA updates</a>
   · <a href="#build-it-yourself">Build from source</a>
+  · <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 </div>
 
-An Android reverse-engineering project that turns Truckers of Europe 3 into a configurable local sandbox. It started with two changes: keep the rain falling and stop the truck getting dirty. It now exposes **27 runtime controls** through a draggable in-game menu, with a signed split-APK updater and an automated release pipeline.
+TOE3 Stormline is an Android reverse-engineering project that turns Truckers of Europe 3 into a configurable local sandbox. It started with two changes: keep the rain falling and stop the truck getting dirty. It now exposes **27 runtime controls** through a draggable in-game menu, with verified split-APK updates and an automated release pipeline.
 
 The menu runs inside the game's activity. **No root or “display over other apps” permission required.** The packaged `libil2cpp.so` stays unchanged; the mod applies its hooks and patches in memory.
 
@@ -89,7 +90,7 @@ The source tree contains the mod code, not the game's APKs, extracted binaries o
 
 ## In-app updates
 
-The Android launcher shows **TOE3 Mod Menu** and a gold-truck **MOD** icon. The package ID and signing key stay unchanged, so this updates the existing mod instead of creating a separate clone.
+The Android launcher shows **TOE3 Stormline** and a gold-truck **MOD** icon. The package ID and signing key stay unchanged, so this updates the existing mod instead of creating a separate clone.
 
 Install an OTA-enabled build manually once using the steps above. After that, open **Updates** in the mod menu: check the latest GitHub Release, download its complete APK set, and request installation. The updater checks file sizes and SHA-256 hashes, rejects older mod builds, and verifies that the downloaded base APK has the installed signing certificate and the build identity declared by the release.
 

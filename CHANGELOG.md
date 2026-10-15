@@ -1,0 +1,53 @@
+# Changelog
+
+Notable changes to TOE3 Stormline, newest first. Every GitHub release also lists, automatically, the commits since the previous published release that change the build inputs (`work/mod`, `ci`, the launcher icon and the release workflow), with links to each commit and the full comparison.
+
+Release tags have the form `toe3-v<game version>-b<game build>-mod-<source revision>`. Record a change under **Unreleased** in the same commit as the change. Once CI publishes the release, rename that heading to the release tag. Commits that only edit this file or the promotional artwork do not trigger a new build or update.
+
+## Unreleased
+
+### Changed
+
+- The mod is now called **TOE3 Stormline**: launcher label, menu title, release titles and release notes. The package name and signing key are unchanged, so it still installs over the existing mod.
+- Release titles include the mod build number, so builds for the same game version can be told apart.
+
+### Added
+
+- This changelog, and a **Changes in this build** section in every release generated from the commit history since the previous published release.
+
+## [toe3-v0.7.64-b193-mod-a57fa36] - 2026-10-15
+
+Game 0.7.64 (build 193). Source [`a57fa36`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/a57fa36068c8083b214484e4001128d75c9b668e).
+
+### Added
+
+- In-game updates: the menu's **Updates** section checks the latest GitHub release, downloads the complete split APK set, verifies file sizes, SHA-256 hashes, the installed signing certificate and the build identity, then asks Android to install it. Older mod builds are rejected.
+- Each release publishes `update.json` with the build identity and APK hashes, covered by `SHA256SUMS`. Every APK carries the signed build identity.
+- Launcher label **TOE3 Mod Menu** and a gold-truck **MOD** launcher icon.
+
+### Known limitations
+
+- An OTA-enabled build has to be installed manually once. Installing an update over the air from a published release has not yet been tested on a device.
+
+## [toe3-v0.7.64-b193-mod-f4e2100] - 2026-10-15
+
+Game 0.7.64 (build 193). Source [`f4e2100`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/f4e2100074157eb0aa0beb509d0b7e72004ee2f3). The mod code is unchanged from the previous release.
+
+### Changed
+
+- Release notes rewritten with hero artwork, a summary of the menu controls, checksum and install steps, save-data and Google Play Games caveats, and provenance.
+
+## [toe3-v0.7.64-b193-mod-2141bcc] - 2026-10-15
+
+First published release, for game 0.7.64 (build 193) on arm64-v8a. Source [`2141bcc`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/2141bccde4522587f70cb962c4ff6cb959311cea).
+
+### Added
+
+- Native mod library that hooks and patches `libil2cpp.so` in memory; the shipped `libil2cpp.so` is unmodified ([`3cc5504`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/3cc5504)).
+- Draggable in-game menu with saved settings and a **Mods enabled** master switch. Modules cover economy, rain dirt, weather, time and traffic, engine power, damage, fuel, fatigue, jobs, shopping and travel ([`3cc5504`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/3cc5504), [`4893328`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/4893328)).
+- Build scripts that inject the mod into the original split APK set and sign it with the mod key ([`4893328`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/4893328)).
+- Release CI: downloads the latest upstream APK set, checks the original signer and the complete split set, refuses to build when `libil2cpp.so`, `libunity.so` or `global-metadata.dat` differ from the reviewed baseline, and publishes signed releases with `SHA256SUMS` ([`a92a869`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/a92a869), [`2141bcc`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/2141bcc)).
+
+[toe3-v0.7.64-b193-mod-a57fa36]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-a57fa36
+[toe3-v0.7.64-b193-mod-f4e2100]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-f4e2100
+[toe3-v0.7.64-b193-mod-2141bcc]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-2141bcc

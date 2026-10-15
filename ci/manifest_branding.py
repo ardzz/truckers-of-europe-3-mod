@@ -40,7 +40,7 @@ import check_apks as ca  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 ICON = ROOT / "assets" / "artwork" / "launcher-icon.png"
 MANIFEST = "AndroidManifest.xml"
-LABEL = "TOE3 Mod Menu"
+LABEL = "TOE3 Stormline"
 INSTALL_PERMISSION = "android.permission.REQUEST_INSTALL_PACKAGES"
 UPDATE_ACTIVITY = "com.toemod.UpdateInstallActivity"
 ANDROID_NS = "http://schemas.android.com/apk/res/android"

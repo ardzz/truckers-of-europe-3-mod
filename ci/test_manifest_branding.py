@@ -224,7 +224,7 @@ class BinaryManifestTests(unittest.TestCase):
     def test_badging_changes_only_label_and_install_permission(self):
         mb.verify_badging(badging(), badging(True))
         for old, value in (("versionCode='10'", "versionCode='11'"), ("targetSdkVersion:'35'", "targetSdkVersion:'34'"),
-                           ("com.example.UnityActivity", "com.example.OtherActivity"), ("TOE3 Mod Menu", "Old title"),
+                           ("com.example.UnityActivity", "com.example.OtherActivity"), (mb.LABEL, "Old title"),
                            ("REQUEST_INSTALL_PACKAGES", "READ_CONTACTS")):
             with self.subTest(change=(old, value)), self.assertRaises(mb.BrandingError):
                 mb.verify_badging(badging(), badging(True).replace(old, value))
