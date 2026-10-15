@@ -16,12 +16,13 @@
   <a href="https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest"><strong>Download the mod</strong></a>
   · <a href="#features">Features</a>
   · <a href="#how-it-works">How it works</a>
+  · <a href="#in-app-updates">OTA updates</a>
   · <a href="#build-it-yourself">Build from source</a>
 </p>
 
 </div>
 
-An Android reverse-engineering project that turns Truckers of Europe 3 into a configurable local sandbox. It started with two changes: keep the rain falling and stop the truck getting dirty. It now exposes **27 runtime controls** through a draggable in-game menu, backed by native ARM64 hooks and an automated APK release pipeline.
+An Android reverse-engineering project that turns Truckers of Europe 3 into a configurable local sandbox. It started with two changes: keep the rain falling and stop the truck getting dirty. It now exposes **27 runtime controls** through a draggable in-game menu, with a signed split-APK updater and an automated release pipeline.
 
 The menu runs inside the game's activity. **No root or “display over other apps” permission required.** The packaged `libil2cpp.so` stays unchanged; the mod applies its hooks and patches in memory.
 
@@ -72,7 +73,7 @@ The Java layer attaches framework views to `UnityPlayerActivity`, communicates t
 ## Install
 
 1. Open the [latest release](https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest).
-2. Download **all APK assets**, `compatibility.json`, `source.json` and `SHA256SUMS` into a dedicated folder.
+2. Download **all APK assets**, `compatibility.json`, `source.json`, `update.json` and `SHA256SUMS` into a dedicated folder.
 3. Verify the files, then install the split set together:
 
 ```sh
@@ -86,13 +87,21 @@ adb install-multiple -r ./*.apk
 
 The source tree contains the mod code, not the game's APKs, extracted binaries or save files. Built APKs are distributed separately through public Releases.
 
+## In-app updates
+
+The Android launcher shows **TOE3 Mod Menu** and a gold-truck **MOD** icon. The package ID and signing key stay unchanged, so this updates the existing mod instead of creating a separate clone.
+
+Install an OTA-enabled build manually once using the steps above. After that, open **Updates** in the mod menu: check the latest GitHub Release, download its complete APK set, and request installation. The updater checks file sizes and SHA-256 hashes, rejects older mod builds, and verifies that the downloaded base APK has the installed signing certificate and the build identity declared by the release.
+
+Android always asks for installation confirmation. On Android 8+, it may first ask you to allow installs from this app; return to the game and press Install after granting that permission. No root or separate overlay permission is required, and silent installation is not supported. Save your game before installing because the app will close or restart. Updates download the full split set, not a small native hot patch.
+
 ## Automated releases
 
 The workflow checks APKPure every day at **02:27 UTC / 09:27 WIB**, on mod or CI changes to `main`, and through **Actions → Mod build and release → Run workflow**. A manual run can select an exact upstream version; leaving the field blank selects the highest advertised version code.
 
 Before building, CI verifies the original signing certificate, consistent split versions, the required `UnityDataAssetPack`, and the reviewed native-code, metadata and Unity hashes in [`ci/compatibility.json`](ci/compatibility.json). A changed fingerprint requires a reviewed port of the mod. Replacing the hashes alone does not update hook addresses or field offsets.
 
-CI signs with an existing key, uploads all assets to a draft, and publishes only after the uploads finish. Each release includes the APK set, `SHA256SUMS`, a source manifest and a compatibility report. Re-running an already published build skips it instead of creating a duplicate.
+CI signs with an existing key, uploads all assets to a draft, and publishes only after the uploads finish. Each release includes the APK set, `SHA256SUMS`, a source manifest, a compatibility report and `update.json` for the in-app updater. Every APK carries the same build identity and required split inventory in its signed `assets/toemod/build.json`. A mod build number distinguishes updates even when the upstream game's version code stays the same. Re-running an already published build skips it instead of creating a duplicate.
 
 <details>
 <summary><strong>Configure signing for your own fork</strong></summary>
@@ -113,7 +122,7 @@ APKPure is a third-party download source. CI checks the actual APK signatures ag
 
 ## Build it yourself
 
-The tested toolchain uses **JDK 21**, **Apktool 2.12.1**, Android **build-tools 37.0.0**, **platform android-31**, and **NDK 30.0.16248370**, plus Python 3.10+, `curl` and `adb`.
+The toolchain uses **JDK 21**, **Apktool 2.12.1**, Android **build-tools 37.0.0**, **platform android-36.1** for compilation, and **NDK 30.0.16248370**, plus Python 3.10+, `curl` and `adb`. The app's minimum and target Android API levels remain those of the reviewed game build.
 
 <details>
 <summary><strong>Fetch, verify, build and install</strong></summary>
@@ -173,7 +182,7 @@ For reverse engineering, extract your own `libil2cpp.so` and `global-metadata.da
 
 ## Verification & limits
 
-The offline suite covers **111 cases** around download parsing, redirect boundaries, package identity, signatures, native compatibility and incomplete APK sets:
+The offline suite covers download parsing, redirect boundaries, package identity, signatures, native compatibility and incomplete APK sets, with OTA metadata and update-policy checks alongside them:
 
 ```sh
 python3 -m unittest discover -s ci -p 'test_*.py' -v
@@ -190,6 +199,6 @@ The menu and hook startup have been smoke-tested on an arm64 Huawei tablet. **No
 - [Cpp2IL](https://github.com/SamboyCoding/Cpp2IL) provides the metadata and method-mapping workflow used during reverse engineering.
 - [Apktool](https://github.com/iBotPeaches/Apktool) handles the Android bytecode round trip for menu injection.
 
-Promotional artwork uses an AI-assisted scene based on a supplied truck reference. Typography and crops are reproducible with [`assets/artwork/render.py`](assets/artwork/render.py) (Pillow, fontconfig and DejaVu Sans). A [square cover](assets/artwork/mod-cover.png) is also available for project previews.
+Promotional artwork uses an AI-assisted scene based on a supplied truck reference. Typography and crops are reproducible with [`assets/artwork/render.py`](assets/artwork/render.py) (Pillow, fontconfig and DejaVu Sans). A [square cover](assets/artwork/mod-cover.png) and the [launcher icon](assets/artwork/launcher-icon.png) are available for project previews.
 
 An independent project for personal, offline experimentation. Not affiliated with or endorsed by Wanda Software.

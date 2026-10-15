@@ -6,12 +6,11 @@
 # 1. ci/check_apks.py runs first: nothing is built unless libil2cpp.so, global-metadata.dat and the
 #    other pinned files are byte-identical to the reviewed build and every APK is Play-signed.
 # 2. build_native.sh (libtoemod.so) and build_base.sh (menu injected into the base APK).
-# 3. Every input APK is rewritten: the old v1 signature files and stamp-cert-sha256 (both invalid
-#    after re-signing) are dropped; every other entry keeps its bytes and its original compression.
-#    lib/arm64-v8a/libtoemod.so is added to the APK that holds libil2cpp.so (a split or the base),
-#    compressed like libil2cpp.so. libil2cpp.so itself is never modified.
-# 4. zipalign + apksigner, then verified: signature, signer == the keystore certificate, alignment,
-#    badging unchanged, pinned entries unchanged. out/release is replaced only after all of it passed.
+# 3. APKs retain their original entries/compression except invalid signature artifacts, patched base
+#    DEX, exact verified launcher/installer manifest edits and icon PNGs. Every APK gets the same
+#    signed assets/toemod/build.json identity; only the native holder gets libtoemod.so.
+# 4. zipalign + apksigner, then verify signer == keystore, alignment, exact intended manifest/icon/
+#    metadata changes and unchanged native pins. out/release is replaced only after all checks pass.
 #
 # Env: PULLED_DIR  original APK set (default: <repo>/com.WandaSoftware.TruckersofEurope3)
 #      KEYSTORE    existing keystore (default: <repo>/build/mod.keystore); never created here
@@ -87,9 +86,9 @@ log "build_base.sh ($BASE_APK)"
 SRC_APK="$PULLED_DIR/$BASE_APK" bash "$MOD_DIR/build_base.sh" >&2
 [[ -f $BASE_BUILT ]] || die "build_base.sh produced no $BASE_BUILT"
 
-# repack ORIGINAL SOURCE OUT [LIB]: copy SOURCE (ORIGINAL or the menu-injected base built from it)
-#   without old signature/stamp files, with ORIGINAL's compression; optionally add LIB.
-# verify ORIGINAL_DIR STAGE NATIVE_APK LIB CERT_SHA256 BUILD_TOOLS APK...: check the signed set.
+# repack ORIGINAL SOURCE OUT BUILD_INFO_BASE [LIB]: the only additions are the menu dex (base),
+#   the same signed build identity (all APKs) and LIB (native holder). Branding is exact, not a wildcard.
+# verify ORIGINAL_DIR STAGE BASE_APK NATIVE_APK LIB CERT_SHA256 BUILD_TOOLS APK...: check the signed set.
 release_py() {
     python3 - "$ROOT_DIR/ci" "$@" <<'PY'
 import hashlib, re, shutil, sys, zipfile, zlib
@@ -97,6 +96,8 @@ from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])
 import check_apks as ca
+import manifest_branding as mb
+import update_manifest as um
 
 STRIP = re.compile(r"META-INF/[^/]+\.(SF|RSA|DSA|EC)|META-INF/MANIFEST\.MF|stamp-cert-sha256", re.I)
 DEX = re.compile(r"classes\d*\.dex")
@@ -120,23 +121,41 @@ def file_crc(path):
     return crc, size
 
 
-def repack(original, source, out, lib=None):
+def repack(original, source, out, build_info_base, lib=None):
     injected_base = Path(source).resolve() != Path(original).resolve()
     with zipfile.ZipFile(original) as zr:
         ref = infos(zr, original)
     ref_kept = {n for n in ref if not STRIP.fullmatch(n)}
-    with zipfile.ZipFile(source) as zs, zipfile.ZipFile(out, "x") as zo:
+    with zipfile.ZipFile(build_info_base) as zb:
+        identity_bytes = um.read_build_info(zb, build_info_base)
+    um.validate_identity(um.parse_json(identity_bytes, um.BUILD_INFO, um.MAX_BUILD_INFO_SIZE))
+    branded = {}
+    if injected_base:
+        tools = ca.find_build_tools()
+        branded = mb.icon_plan(tools, original)
+        with zipfile.ZipFile(original) as zr:
+            branded[mb.MANIFEST] = mb.patch_manifest(zr.read(mb.MANIFEST))
+    with zipfile.ZipFile(original) as zip_ref, zipfile.ZipFile(source) as zs, zipfile.ZipFile(out, "x") as zo:
         src = infos(zs, source)
         kept = [n for n in src if not STRIP.fullmatch(n)]
         missing, added = ref_kept - set(kept), set(kept) - ref_kept
         if missing:
             fail(f"{source} lost entries of {original}: {sorted(missing)}")
-        if added and not (injected_base and len(added) == 1 and all(DEX.fullmatch(n) for n in added)):
+        dex_added = {n for n in added if DEX.fullmatch(n)}
+        expected_added = {um.BUILD_INFO, *dex_added} if injected_base else set()
+        if added != expected_added or (injected_base and len(dex_added) != 1):
             fail(f"{source} has unexpected new entries: {sorted(added)}")
+        if um.BUILD_INFO in ref:
+            fail(f"{original} already contains signed mod build metadata")
+        if injected_base and um.read_build_info(zs, source) != identity_bytes:
+            fail(f"{source}: build metadata differs from {build_info_base}")
         for n in ref_kept:
-            same = (src[n].CRC, src[n].file_size) == (ref[n].CRC, ref[n].file_size)
-            if not same and not (injected_base and DEX.fullmatch(n)):
-                fail(f"{source}: {n} differs from {original}")
+            if n in branded:
+                if zs.read(n) != branded[n]:
+                    fail(f"{source}: {n} is not the exact intended branding edit")
+            elif not (injected_base and DEX.fullmatch(n)):
+                if ca.sha256_entry(zs, n, source) != ca.sha256_entry(zip_ref, n, original):
+                    fail(f"{source}: {n} differs from {original}")
         if lib and (MOD_LIB in src or ca.NATIVE_LIB not in ref):
             fail(f"{original}: cannot add {MOD_LIB} next to {ca.NATIVE_LIB}")
         expected = {}
@@ -147,6 +166,12 @@ def repack(original, source, out, lib=None):
             with zs.open(src[n]) as r, zo.open(info, "w") as w:
                 shutil.copyfileobj(r, w, ca.CHUNK)
             expected[n] = (src[n].CRC, src[n].file_size, meta.compress_type)
+        if um.BUILD_INFO not in src:
+            info = zipfile.ZipInfo(um.BUILD_INFO)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            zo.writestr(info, identity_bytes)
+            expected[um.BUILD_INFO] = (zlib.crc32(identity_bytes), len(identity_bytes), info.compress_type)
         if lib:
             like = ref[ca.NATIVE_LIB]
             info = zipfile.ZipInfo(MOD_LIB, like.date_time)
@@ -163,9 +188,14 @@ def repack(original, source, out, lib=None):
                 fail(f"{out}: {n} was not copied unchanged")
 
 
-def verify(original_dir, stage, native_apk, lib, cert_sha256, build_tools, *apks):
+def verify(original_dir, stage, base_apk, native_apk, lib, cert_sha256, build_tools, *apks):
     tools = ca.find_build_tools(build_tools)
     entries = {}
+    with ca.open_apk(Path(stage, base_apk)) as zf:
+        identity_bytes = um.read_build_info(zf, base_apk)
+    badging = ca.read_badging(tools, Path(stage, base_apk))
+    um.validate_identity(um.parse_json(identity_bytes, um.BUILD_INFO, um.MAX_BUILD_INFO_SIZE),
+                         badging["name"], int(badging["versionCode"]), badging["versionName"], list(apks))
     for apk in apks:
         out = Path(stage, apk)
         _, sha256 = ca.verified_signers(tools, out)
@@ -173,10 +203,14 @@ def verify(original_dir, stage, native_apk, lib, cert_sha256, build_tools, *apks
             fail(f"{apk}: signed by {sorted(sha256)}, expected the keystore certificate {cert_sha256}")
         original, rebuilt = (ca.run_tool([tools.aapt2, "dump", "badging", str(p)])[:2]
                              for p in (Path(original_dir, apk), out))
-        if original[0] != 0 or original != rebuilt:
+        if apk == base_apk:
+            mb.verify(tools, Path(original_dir, apk), out)
+        elif original[0] != 0 or original != rebuilt:
             fail(f"{apk}: aapt2 badging differs from the original")
         with ca.open_apk(out) as zf:
             entries[apk] = ca.entry_names(zf, apk)
+            if um.read_build_info(zf, apk) != identity_bytes:
+                fail(f"{apk}: signed build identity differs from {base_apk}")
         leftovers = [n for n in entries[apk] if n == "stamp-cert-sha256"]
         if leftovers:
             fail(f"{apk}: still contains {leftovers}")
@@ -210,7 +244,7 @@ for apk in "${APKS[@]}"; do
     lib=()
     if [[ $apk == "$NATIVE_APK" ]]; then lib=("$LIB"); fi
     log "repack $apk${lib:+ (+ libtoemod.so)}"
-    release_py repack "$PULLED_DIR/$apk" "$src" "$STAGE/$apk.unsigned" "${lib[@]}"
+    release_py repack "$PULLED_DIR/$apk" "$src" "$STAGE/$apk.unsigned" "$BASE_BUILT" "${lib[@]}"
     "$BT/zipalign" -f -P 16 4 "$STAGE/$apk.unsigned" "$STAGE/$apk"
     rm "$STAGE/$apk.unsigned"
     "$BT/apksigner" sign --ks "$KEYSTORE" --ks-key-alias "$KS_ALIAS" --ks-pass env:KS_PASS --key-pass env:KEY_PASS \
@@ -219,7 +253,7 @@ for apk in "${APKS[@]}"; do
 done
 
 log "verify signed set (signer $KEY_CERT_SHA256)"
-release_py verify "$PULLED_DIR" "$STAGE" "$NATIVE_APK" "$LIB" "$KEY_CERT_SHA256" "$BT" "${APKS[@]}"
+release_py verify "$PULLED_DIR" "$STAGE" "$BASE_APK" "$NATIVE_APK" "$LIB" "$KEY_CERT_SHA256" "$BT" "${APKS[@]}"
 
 chmod 755 "$STAGE"
 rm -rf "$OUT"

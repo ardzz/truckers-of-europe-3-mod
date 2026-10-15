@@ -73,7 +73,13 @@ def render():
     text(draw, (64, 927), "UNOFFICIAL MOD ARTWORK", 25, MUTED, tracking=1)
     cover.quantize(colors=256).save(HERE / "mod-cover.png", optimize=True)
 
-    for name in ("mod-hero.webp", "mod-cover.png"):
+    icon = scene.crop((940, 20, 1741, 821)).resize((512, 512), Image.Resampling.LANCZOS)
+    draw = ImageDraw.Draw(icon)
+    draw.rounded_rectangle((136, 377, 376, 467), radius=16, fill=GOLD, outline="#0e1a27", width=3)
+    draw.text((256, 423), "MOD", font=font(82, bold=True), fill="#0e1a27", anchor="mm")
+    icon.save(HERE / "launcher-icon.png", optimize=True)
+
+    for name in ("mod-hero.webp", "mod-cover.png", "launcher-icon.png"):
         path = HERE / name
         with Image.open(path) as image:
             print(f"{name}: {image.width}x{image.height}, {path.stat().st_size:,} bytes")

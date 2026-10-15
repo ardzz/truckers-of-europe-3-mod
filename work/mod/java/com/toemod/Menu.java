@@ -2,12 +2,15 @@ package com.toemod;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,6 +27,7 @@ import android.widget.CompoundButton;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -45,7 +49,8 @@ import java.util.Map;
  *
  * The overlay is a transparent, non-clickable FrameLayout added to the activity's content
  * view (no overlay permission). Only the icon/panel consume touches; everything else falls
- * through to the Unity player.
+ * through to the Unity player. The Updates section works independently of the native hooks,
+ * so a broken or disabled mod can still be updated.
  */
 public final class Menu {
     static final String TAG = "toemod";
@@ -72,6 +77,7 @@ public final class Menu {
 
     // Process-wide: the native library and hook state outlive a recreated activity.
     private static boolean sLibLoaded;
+    private static String sLibError; // set once System.loadLibrary failed in this process
     private static int sState = WAITING;
     private static List<Feature> sFeatures;
     private static Menu sCurrent;
@@ -82,6 +88,13 @@ public final class Menu {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final float density;
     private final Application.ActivityLifecycleCallbacks lifecycle;
+    private final Updater updater;
+    private final Updater.Listener updaterListener = new Updater.Listener() {
+        @Override
+        public void onUpdaterChanged() {
+            renderUpdates();
+        }
+    };
 
     private boolean master;
     private float posFx;
@@ -94,17 +107,25 @@ public final class Menu {
     private MaxHeightLayout panel;
     private TextView status;
     private LinearLayout list;
+    private TextView upInstalled;
+    private TextView upStatus;
+    private ProgressBar upProgress;
+    private TextView upSaveHint;
+    private TextView upCheck;
+    private TextView upDownload;
+    private TextView upInstall;
+    private TextView upCancel;
+    private TextView upRelease;
 
     public static void start(Activity a) {
         try {
-            if (!sLibLoaded) {
+            if (!sLibLoaded && sLibError == null) {
                 try {
                     System.loadLibrary("toemod");
                     sLibLoaded = true;
                 } catch (UnsatisfiedLinkError e) {
                     Log.e(TAG, "loadLibrary(toemod) failed", e);
-                    Toast.makeText(a, "toemod: native library missing - mods disabled", Toast.LENGTH_LONG).show();
-                    return;
+                    sLibError = "native library missing";
                 }
             }
             if (sCurrent != null) {
@@ -133,11 +154,14 @@ public final class Menu {
         master = prefs.getBoolean(K_MASTER, true);
         posFx = prefs.getFloat(K_POS_X, 0f);
         posFy = prefs.getFloat(K_POS_Y, 0.3f);
+        updater = Updater.get(a);
         lifecycle = new Application.ActivityLifecycleCallbacks() {
             @Override public void onActivityCreated(Activity act, Bundle b) {}
             @Override public void onActivityStarted(Activity act) {}
             @Override public void onActivityResumed(Activity act) {
-                if (act == activity) ensureAttached();
+                if (act != activity) return;
+                updater.onResume();
+                ensureAttached();
             }
             @Override public void onActivityPaused(Activity act) {}
             @Override public void onActivityStopped(Activity act) {}
@@ -200,16 +224,21 @@ public final class Menu {
 
         if (sState == READY) {
             showFeatures();
+        } else if (!sLibLoaded) {
+            fail(sLibError);
         } else {
             sState = WAITING;
             pollStart = SystemClock.uptimeMillis();
             handler.post(poll);
         }
         updateStatus();
+        updater.setListener(updaterListener);
+        renderUpdates();
     }
 
     private void destroy() {
         handler.removeCallbacksAndMessages(null);
+        updater.clearListener(updaterListener);
         activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
         if (root != null && root.getParent() instanceof ViewGroup) ((ViewGroup) root.getParent()).removeView(root);
         if (sCurrent == this) sCurrent = null;
@@ -483,15 +512,149 @@ public final class Menu {
         p.addView(divider());
 
         ScrollView scroll = new ScrollView(ctx);
+        LinearLayout content = new LinearLayout(ctx);
+        content.setOrientation(LinearLayout.VERTICAL);
         list = new LinearLayout(ctx);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setAlpha(master ? 1f : 0.5f);
         list.addView(hint("Waiting for hooks to install..."));
-        scroll.addView(list, new FrameLayout.LayoutParams(
+        content.addView(list, matchWrap());
+        // Outside the dimmed feature list: updating must work with mods off or the hooks failed.
+        content.addView(divider());
+        content.addView(buildUpdates(), matchWrap());
+        scroll.addView(content, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         // Last child: LinearLayout hands it only the height left under maxHeight, so it scrolls.
         p.addView(scroll, matchWrap());
         return p;
+    }
+
+    // ------------------------------------------------------------------ updates
+
+    private View buildUpdates() {
+        LinearLayout box = new LinearLayout(ctx);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, 0, 0, dp(4));
+
+        TextView head = label(13, ACCENT);
+        head.setText("Updates");
+        head.setTypeface(Typeface.DEFAULT_BOLD);
+        head.setPadding(0, dp(10), 0, dp(4));
+        box.addView(head, matchWrap());
+
+        upInstalled = label(12, TEXT_DIM);
+        box.addView(upInstalled, matchWrap());
+        upStatus = label(13, TEXT);
+        upStatus.setPadding(0, dp(4), 0, 0);
+        box.addView(upStatus, matchWrap());
+        upProgress = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
+        upProgress.setMax(1000);
+        upProgress.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        box.addView(upProgress, matchWrap());
+        upSaveHint = label(12, ACCENT);
+        upSaveHint.setText("Save your game before installing: Android closes the game to update it.");
+        upSaveHint.setPadding(0, dp(4), 0, 0);
+        box.addView(upSaveHint, matchWrap());
+
+        upDownload = action("Download", true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                updater.download();
+            }
+        });
+        upInstall = action("Install", true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                updater.install(activity);
+            }
+        });
+        upCancel = action("Cancel", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                updater.cancel();
+            }
+        });
+        upCheck = action("Check", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                updater.check();
+            }
+        });
+        upRelease = action("View release", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openReleasePage();
+            }
+        });
+        HorizontalScrollView actions = new HorizontalScrollView(ctx);
+        actions.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(6), 0, 0);
+        for (TextView b : new TextView[] {upDownload, upInstall, upCancel, upCheck, upRelease}) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(32));
+            lp.rightMargin = dp(6);
+            row.addView(b, lp);
+        }
+        actions.addView(row);
+        box.addView(actions, matchWrap());
+        return box;
+    }
+
+    private void renderUpdates() {
+        if (upStatus == null) return;
+        Updater.Phase p = updater.phase();
+        UpdatePolicy.Identity inst = updater.installed();
+        upInstalled.setText(inst == null ? "Installed: unknown" : "Installed: "
+                + (inst.modBuild == 0 ? "local build" : "build " + inst.modBuild) + " \u00B7 game " + inst.versionName
+                + "\n" + inst.tag);
+
+        boolean progress = updater.showsProgress();
+        String msg = updater.message();
+        if (progress) msg += "\n" + Updater.mb(updater.progressDone()) + " of " + Updater.mb(updater.progressTotal());
+        upStatus.setText(msg);
+        upStatus.setTextColor(updater.isError() ? ERROR : TEXT);
+        show(upStatus, !msg.isEmpty());
+        show(upProgress, progress);
+        upProgress.setProgress(updater.progressPermille());
+        show(upSaveHint, p == Updater.Phase.READY || p == Updater.Phase.INSTALLING);
+
+        upInstall.setText(updater.installPermitted() ? "Install" : "Allow installs");
+        show(upDownload, p == Updater.Phase.AVAILABLE);
+        show(upInstall, p == Updater.Phase.READY);
+        show(upCancel, p == Updater.Phase.DOWNLOADING || p == Updater.Phase.INSTALLING);
+        show(upCheck, p == Updater.Phase.IDLE || p == Updater.Phase.AVAILABLE);
+        show(upRelease, updater.release() != null);
+    }
+
+    private void openReleasePage() {
+        String url = updater.releasePage();
+        if (url == null) return;
+        try {
+            activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(activity, "toemod: no browser available for " + url, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private TextView action(String text, boolean primary, View.OnClickListener click) {
+        TextView t = button(text);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        t.setPadding(dp(12), 0, dp(12), 0);
+        if (primary) t.setBackground(rounded(0x66FF9800, dp(6), 0));
+        t.setOnClickListener(click);
+        return t;
+    }
+
+    private TextView label(int sp, int color) {
+        TextView t = new TextView(ctx);
+        t.setTextColor(color);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        return t;
+    }
+
+    private static void show(View v, boolean visible) {
+        v.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
     private void showFeatures() {

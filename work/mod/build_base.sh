@@ -4,8 +4,8 @@
 #   bash work/mod/build_base.sh   ->   work/mod/out/base-unsigned.apk   (unsigned, not zipaligned)
 #
 # Steps: javac (Java 8 bytecode) -> d8 (min-api 23) -> apktool d -r (smali for main dex only,
-# resources kept raw) -> call Menu.start(this) right after super.onCreate() in
-# UnityPlayerActivity -> menu dex added as the next raw classesN.dex -> apktool b -> verify.
+# resources kept raw) -> patch launcher/installer manifest and icon rasters, embed build.json ->
+# call Menu.start(this) after super.onCreate() -> add menu dex -> apktool b -> verify.
 #
 # Overrides: SRC_APK, APKTOOL (path or command, default: apktool on PATH), BUILD_TOOLS (default: newest
 # build-tools), ANDROID_JAR (default: newest platforms/*/android.jar), ANDROID_HOME/ANDROID_SDK_ROOT,
@@ -45,6 +45,7 @@ case "$(realpath -m "$SRC_APK")" in
 esac
 command -v javac >/dev/null || die "javac not on PATH"
 command -v unzip >/dev/null || die "unzip not on PATH"
+command -v python3 >/dev/null || die "python3 not on PATH"
 
 rm -rf "$BUILD" "$OUT_APK"
 mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/verify"
@@ -65,6 +66,15 @@ mapfile -t CLASS_FILES < <(find "$BUILD/classes" -name '*.class' | sort)
 log "apktool d -r --only-main-classes $SRC_APK"
 "$APKTOOL" d -r --only-main-classes -f -o "$BUILD/apk" "$SRC_APK"
 APK_DIR="$BUILD/apk"
+
+# ---------------------------------------------------------------- launcher branding + signed build identity
+log "launcher icon/title and OTA manifest entries"
+python3 "$ROOT_DIR/ci/manifest_branding.py" apply --original "$SRC_APK" --decoded "$APK_DIR" --build-tools "$BT"
+log "signed build identity (source set guarded again to bind required_apks)"
+mkdir -p "$APK_DIR/assets/toemod"
+python3 "$ROOT_DIR/ci/update_manifest.py" build-info --base-apk "$SRC_APK" --build-tools "$BT" \
+    --output "$BUILD/build.json"
+cp "$BUILD/build.json" "$APK_DIR/assets/toemod/build.json"
 
 # ---------------------------------------------------------------- patch UnityPlayerActivity.onCreate
 shopt -s nullglob
@@ -122,11 +132,11 @@ log "apktool b -> $OUT_APK"
 [[ -f $OUT_APK ]] || die "apktool b produced no APK"
 
 # ---------------------------------------------------------------- verify
-log "verify: aapt2 dump badging (must be identical to the original)"
-"$AAPT2" dump badging "$SRC_APK" > "$BUILD/verify/badging.orig"
+log "verify: exact intended manifest edits, launcher title/icons and unchanged package/version"
+python3 "$ROOT_DIR/ci/manifest_branding.py" verify --original "$SRC_APK" --patched "$OUT_APK" --build-tools "$BT"
 "$AAPT2" dump badging "$OUT_APK" > "$BUILD/verify/badging.new" || die "aapt2 dump badging failed on output"
-diff -u "$BUILD/verify/badging.orig" "$BUILD/verify/badging.new" || die "badging differs from original"
-grep -E "^(package|launchable-activity|minSdkVersion|targetSdkVersion):" "$BUILD/verify/badging.new"
+grep -E "^(package|launchable-activity|minSdkVersion|targetSdkVersion|application):" "$BUILD/verify/badging.new"
+cmp -s "$BUILD/build.json" <(unzip -p "$OUT_APK" assets/toemod/build.json) || die "signed build identity changed"
 
 log "verify: zip entries (original vs output)"
 unzip -Z1 "$SRC_APK" | sort > "$BUILD/verify/entries.orig"
@@ -135,11 +145,12 @@ comm -23 "$BUILD/verify/entries.orig" "$BUILD/verify/entries.new" > "$BUILD/veri
 comm -13 "$BUILD/verify/entries.orig" "$BUILD/verify/entries.new" > "$BUILD/verify/entries.added"
 echo "removed: $(tr '\n' ' ' < "$BUILD/verify/entries.removed")"
 echo "added:   $(tr '\n' ' ' < "$BUILD/verify/entries.added")"
-# Only signature artifacts may disappear (old v1 files + Play source stamp; both are invalid once
-# the APK is re-signed); only the menu dex may appear.
+# Only signature artifacts may disappear (invalid after re-signing); only the menu dex and the
+# signed build identity may appear. Other non-DEX changes are narrowly checked again by build_release.
 ! grep -qv -E '^(META-INF/[^/]+\.(SF|RSA|DSA|EC|MF)|stamp-cert-sha256)$' "$BUILD/verify/entries.removed" \
     || die "unexpected entries removed"
-[[ $(cat "$BUILD/verify/entries.added") == "$MENU_DEX" ]] || die "unexpected entries added"
+printf '%s\n' "$MENU_DEX" 'assets/toemod/build.json' | sort > "$BUILD/verify/entries.expected"
+cmp -s "$BUILD/verify/entries.added" "$BUILD/verify/entries.expected" || die "unexpected entries added"
 
 log "verify: entries that must stay uncompressed (targetSdk >= 30 needs stored resources.arsc)"
 unzip -v "$OUT_APK" > "$BUILD/verify/zipinfo"
@@ -154,7 +165,7 @@ unzip -q -o "$OUT_APK" 'classes*.dex' -d "$BUILD/verify/dex"
 cmp -s "$BUILD/verify/dex/$MENU_DEX" "$BUILD/dex/classes.dex" || die "$MENU_DEX in APK differs from d8 output"
 "$DEXDUMP" "$BUILD/verify/dex/$MENU_DEX" > "$BUILD/verify/menu.dump"
 grep "Class descriptor" "$BUILD/verify/menu.dump" | sed "s/.*: '\(.*\)'/  \1/"
-for c in 'Lcom/toemod/Menu;' 'Lcom/toemod/Native;' 'Lcom/toemod/Feature;'; do
+for c in 'Lcom/toemod/Menu;' 'Lcom/toemod/Native;' 'Lcom/toemod/Feature;' 'Lcom/toemod/UpdateInstallActivity;'; do
     grep -q "Class descriptor  : '$c'" "$BUILD/verify/menu.dump" || die "class $c missing"
 done
 awk '/Class descriptor  : .Lcom\/toemod\/Menu;./ {c = 1} c && /name +: .start./ {m = 1} m && /type +:/ {print "  Menu.start type: " $NF; exit}' \
