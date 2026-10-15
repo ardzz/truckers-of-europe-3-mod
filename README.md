@@ -2,7 +2,9 @@
 
 <h1>Truckers of Europe 3<br>Runtime Mod Menu</h1>
 
-<p>Rain on. Dirt off. Tune your next haul in-game.</p>
+<p><img src="assets/artwork/mod-hero.webp" alt="Truckers of Europe 3 Mod Menu artwork featuring a gold tanker truck on a rainy motorway" width="1200"></p>
+
+<p><sub>Unofficial mod artwork, not a gameplay screenshot.</sub></p>
 
 <p>
   <a href="https://github.com/ardzz/truckers-of-europe-3-mod/actions/workflows/mod-release.yml"><img src="https://github.com/ardzz/truckers-of-europe-3-mod/actions/workflows/mod-release.yml/badge.svg?branch=main" alt="Mod build and release status"></a>
@@ -70,12 +72,12 @@ The Java layer attaches framework views to `UnityPlayerActivity`, communicates t
 ## Install
 
 1. Open the [latest release](https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest).
-2. Download **all three APK files** and `SHA256SUMS` into a dedicated folder.
+2. Download **all APK assets**, `compatibility.json`, `source.json` and `SHA256SUMS` into a dedicated folder.
 3. Verify the files, then install the split set together:
 
 ```sh
-sha256sum --check --ignore-missing SHA256SUMS
-adb install-multiple -r base.apk split_UnityDataAssetPack.apk split_config.arm64_v8a.apk
+sha256sum --check SHA256SUMS
+adb install-multiple -r ./*.apk
 ```
 
 `base.apk` alone is not a complete installation.
@@ -187,5 +189,7 @@ The menu and hook startup have been smoke-tested on an arm64 Huawei tablet. **No
 - [And64InlineHook](https://github.com/Rprop/And64InlineHook) by Rprop provides ARM64 inline hooking; its vendored files retain their MIT license notice.
 - [Cpp2IL](https://github.com/SamboyCoding/Cpp2IL) provides the metadata and method-mapping workflow used during reverse engineering.
 - [Apktool](https://github.com/iBotPeaches/Apktool) handles the Android bytecode round trip for menu injection.
+
+Promotional artwork uses an AI-assisted scene based on a supplied truck reference. Typography and crops are reproducible with [`assets/artwork/render.py`](assets/artwork/render.py) (Pillow, fontconfig and DejaVu Sans). A [square cover](assets/artwork/mod-cover.png) is also available for project previews.
 
 An independent project for personal, offline experimentation. Not affiliated with or endorsed by Wanda Software.
