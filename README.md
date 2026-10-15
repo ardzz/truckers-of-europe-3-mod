@@ -1,119 +1,191 @@
-# truckers-of-europe-3-mod
+<div align="center">
 
-Runtime mod + floating in-game menu for **Truckers of Europe 3** (Android, Unity 2022.3 / IL2CPP, arm64).
+<h1>Truckers of Europe 3<br>Runtime Mod Menu</h1>
 
-A native library (`libtoemod.so`) inline-hooks and byte-patches `libil2cpp.so` at runtime; a small Java overlay
-(`com.toemod.Menu`, injected into `UnityPlayerActivity.onCreate`) toggles each feature and edits its value while
-playing. No root, no overlay permission, `libil2cpp.so` itself is shipped unmodified.
+<p>Rain on. Dirt off. Tune your next haul in-game.</p>
 
-> This repo contains only the mod's own code — no game files. You need your own copy of the game.
+<p>
+  <a href="https://github.com/ardzz/truckers-of-europe-3-mod/actions/workflows/mod-release.yml"><img src="https://github.com/ardzz/truckers-of-europe-3-mod/actions/workflows/mod-release.yml/badge.svg?branch=main" alt="Mod build and release status"></a>
+  <a href="https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest"><img src="https://img.shields.io/github/v/release/ardzz/truckers-of-europe-3-mod?label=release" alt="Latest GitHub release"></a>
+  <img src="https://img.shields.io/badge/platform-Android%20arm64-2e7d32?logo=android&logoColor=white" alt="Platform: Android arm64">
+</p>
+
+<p>
+  <a href="https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest"><strong>Download the mod</strong></a>
+  · <a href="#features">Features</a>
+  · <a href="#how-it-works">How it works</a>
+  · <a href="#build-it-yourself">Build from source</a>
+</p>
+
+</div>
+
+An Android reverse-engineering project that turns Truckers of Europe 3 into a configurable local sandbox. It started with two changes: keep the rain falling and stop the truck getting dirty. It now exposes **27 runtime controls** through a draggable in-game menu, backed by native ARM64 hooks and an automated APK release pipeline.
+
+The menu runs inside the game's activity. **No root or “display over other apps” permission required.** The packaged `libil2cpp.so` stays unchanged; the mod applies its hooks and patches in memory.
+
+> **Compatibility:** reviewed for game **0.7.64 / build 193**, `arm64-v8a`. Unknown native code fails the build rather than receiving guessed patches. Google Play Games login and cloud saves do not work with the re-signed APK, including through microG.
 
 ## Features
 
-| Category | Feature id | What it does | Default |
-|---|---|---|---|
-| Economy | `money`, `gold`, `wash_tickets`, `level`, `xp` | Override the value the game reads (spending never reduces it) | money/gold/tickets/level on |
-| Economy | `ad_free`, `unlock_trailers` | Force the paid flags | off |
-| Damage | `no_rain_dirt` | Truck/trailer don't get dirty from rain | on |
-| Damage | `no_truck_damage`, `no_trailer_damage` | Collisions don't lower truck health / raise trailer+cargo damage | off |
-| Damage | `free_repair`, `instant_repair` | Garage + roadside repair cost 0; repair bar completes immediately | off |
-| Fuel | `inf_fuel`, `free_fuel` | No fuel consumption; refuelling (station + roadside) costs 0 | off |
-| Driver | `no_fatigue` | Fatigue always reads "rested": no blackouts / sleep nag; sleeping still works | off |
-| Jobs | `no_penalties` | No late or damage penalty on delivery | off |
-| Jobs | `pay_mult`, `xp_mult` | Multiply job income / XP (1–20×) | off |
-| Jobs | `bonus_no_ad` | Every rewarded-ad option grants its reward without an ad | off |
-| Shopping | `free_shop` | Trucks, parts, interior, trailers, garages and upgrades cost 0 (money + gold) | off |
-| Shopping | `free_travel` | Ferry, toll gates and tow truck cost 0 | off |
-| Truck | `engine_mult` | Engine torque/power multiplier (1–10×), rev limit preserved | off |
-| Truck | `no_speed_limit` | Disable the >200 km/h auto-tow | off |
-| World | `weather` | Force Clear / Rainy / Cloudy / Foggy | on, Rainy |
-| World | `time_freeze`, `time_hour` | Freeze the clock / set the hour | off |
-| World | `traffic` | AI traffic cap (0 = none) | off |
-
-Settings persist in SharedPreferences (`toemod`). The "Mods enabled" master switch turns everything off at once.
-
-## Layout
-
-| Path | What |
+| Category | Menu controls |
 |---|---|
-| `work/mod/src/mod.h` | Module API: `FEATURE`, `INSTALL`, `HOOK`, `BytePatch`, `FIELD`, `VA` |
-| `work/mod/src/main.cpp` | Core: finds `libil2cpp.so`, hooks (And64InlineHook), verified byte patches, registry, JNI |
-| `work/mod/src/*.cpp` | Feature modules (economy, fuel, damage, fatigue, jobs, shop, perf, world); each documents its evidence |
-| `work/mod/java/com/toemod/` | Floating menu (plain Android views) |
-| `work/mod/claims.txt` | Function entries / byte ranges owned by each module (no two modules touch the same code) |
-| `work/mod/build_native.sh` | NDK build of `libtoemod.so` |
-| `work/mod/build_base.sh` | apktool injection of the menu into `base.apk` |
-| `work/mod/build_release.sh` | Builds, aligns and signs the full split set |
-| `work/re.py` | RE helper over the Cpp2IL dump (find / disassemble / callers / field xrefs) |
-| `work/mod/third_party/` | [And64InlineHook](https://github.com/Rprop/And64InlineHook) (MIT) |
+| Economy | Money, gold, wash tickets, level and XP overrides; ad-free and trailer-unlock flags |
+| Weather & world | Clear, rainy, cloudy or foggy weather; clock hour, time freeze and AI traffic count |
+| Truck | Engine power multiplier up to 10×; disable the high-speed auto-tow check |
+| Damage | Prevent rain dirt; prevent truck and trailer/cargo collision damage; free and instant repairs |
+| Fuel | Hold the current fuel level; free station and roadside refuelling |
+| Driver | Fully rested fatigue value, without removing the sleep system |
+| Jobs | Remove delivery penalties; income and XP multipliers up to 20×; rewarded-ad actions without the ad |
+| Shopping & travel | Free trucks, parts, interiors, trailers and garages; free ferry, tolls and towing |
 
-## Target build
+The floating panel has per-feature switches, value sliders and weather selection. Collapse it back to the draggable button to keep driving. Settings persist between launches, and the **Mods enabled** master switch disables every feature together.
 
-Package `com.WandaSoftware.TruckersofEurope3`, version `0.7.64` (versionCode 193), arm64-v8a. Addresses are
-hard-coded for this build (`vaddr = Cpp2IL RVA + 0x4000`); byte patches verify the original bytes before writing
-and refuse on mismatch, but other game versions need re-mapping.
+Money, gold, wash tickets, level, rain and rain-dirt prevention are enabled by default. Other controls start disabled. Changes follow the game's update ticks or screen refreshes; disabling a control does not undo purchases, rewards or saved progress.
 
-## Build & install
+## How it works
 
-Requirements: Android SDK build-tools, NDK (r27+), JDK, `apktool`, Python 3, `adb`.
+**C++17 · Java 8 bytecode · JNI · Android NDK · IL2CPP · Apktool · GitHub Actions**
 
-```bash
-# 1. pull your installed game's splits into ./com.WandaSoftware.TruckersofEurope3/
-adb shell pm path com.WandaSoftware.TruckersofEurope3   # then adb pull each path
-# 2. (optional, for RE) extract libil2cpp.so + global-metadata.dat into work/ and run Cpp2IL:
-#    cpp2il --use-processor attributeinjector --output-as diffable-cs --output-to work/cs ...
-# 3. use an existing signing key; a missing key fails instead of changing the install identity
-export KEYSTORE="$PWD/build/mod.keystore" KS_ALIAS=mod
-read -r -s -p 'Keystore password: ' KS_PASS; export KS_PASS; echo
-bash work/mod/build_release.sh
-# 4. first time: uninstall the store version (signature differs; local save is lost)
-adb install-multiple -r work/mod/out/release/*.apk
+```mermaid
+flowchart TB
+    subgraph Build[Verified build pipeline]
+        Source[Genuine upstream APK set] --> Gate{Signature, assets and native fingerprints match?}
+        Gate -->|No| Stop[Stop for manual review]
+        Gate -->|Yes| Package[Compile native library, inject menu and sign all splits]
+        Package --> Release[Public GitHub Release with checksums]
+    end
+
+    subgraph Device[Android runtime]
+        Menu[Java floating menu] -->|JNI settings| Native[libtoemod.so]
+        Native -->|ARM64 entry hooks and verified byte patches| Game[Game logic in memory]
+    end
+
+    Release --> Device
 ```
 
-Re-signing breaks Google Play Games sign-in / cloud save (OAuth client is bound to the developer's certificate;
-this applies to microG too).
+The native library waits for `libil2cpp.so` to load, installs entry hooks through [And64InlineHook](https://github.com/Rprop/And64InlineHook), and registers the controls exposed to Java. Byte patches check the original instructions before writing and restore them when disabled. Feature modules own separate hook addresses and patch ranges to avoid overlap.
 
-## Automated builds
+The Java layer attaches framework views to `UnityPlayerActivity`, communicates through JNI, and stores configuration in SharedPreferences. It does not need a separate overlay service.
 
-GitHub Actions checks APKPure daily at **02:27 UTC**, on mod/CI changes on `main`, or through
-**Actions → Mod build and release → Run workflow**. Leave `version` blank for latest; an exact version
-can also be requested. Completed releases are skipped. Releases contain the signed APK set, `SHA256SUMS`,
-the source manifest and a compatibility report. Uploads finish in a draft before publication.
+## Install
 
-Verified end-to-end: [fetch/build/sign/public release](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677161415)
-and [manual rerun skipping an existing release](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238).
-The offline suite covers 111 download, identity, compatibility and incomplete-package boundary cases.
+1. Open the [latest release](https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest).
+2. Download **all three APK files** and `SHA256SUMS` into a dedicated folder.
+3. Verify the files, then install the split set together:
 
-CI verifies the package, every APK signature against the original developer certificate, matching split
-versions, the required `UnityDataAssetPack` and its core game data, and the reviewed `libil2cpp.so`, IL2CPP
-metadata and Unity fingerprints in `ci/compatibility.json`. Standalone APKs without this asset split are rejected.
-**Unknown native code fails the build; there is no guessed auto-port.** A game update that changes those
-files needs a reviewed address/field-layout port and an updated baseline. Editing just the baseline hashes
-does not port the mod. CI packaging checks do not replace gameplay testing on an arm64 Android device.
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+adb install-multiple -r base.apk split_UnityDataAssetPack.apk split_config.arm64_v8a.apk
+```
 
-Repository Actions secrets:
+`base.apk` alone is not a complete installation.
 
-| Secret | Purpose |
+> **Before switching from the store version:** its signing certificate differs, so Android requires uninstalling it first. Uninstalling removes the local save. Back up anything recoverable before proceeding. Updates signed with the same mod key can install over the mod without an uninstall.
+
+The source tree contains the mod code, not the game's APKs, extracted binaries or save files. Built APKs are distributed separately through public Releases.
+
+## Automated releases
+
+The workflow checks APKPure every day at **02:27 UTC / 09:27 WIB**, on mod or CI changes to `main`, and through **Actions → Mod build and release → Run workflow**. A manual run can select an exact upstream version; leaving the field blank selects the highest advertised version code.
+
+Before building, CI verifies the original signing certificate, consistent split versions, the required `UnityDataAssetPack`, and the reviewed native-code, metadata and Unity hashes in [`ci/compatibility.json`](ci/compatibility.json). A changed fingerprint requires a reviewed port of the mod. Replacing the hashes alone does not update hook addresses or field offsets.
+
+CI signs with an existing key, uploads all assets to a draft, and publishes only after the uploads finish. Each release includes the APK set, `SHA256SUMS`, a source manifest and a compatibility report. Re-running an already published build skips it instead of creating a duplicate.
+
+<details>
+<summary><strong>Configure signing for your own fork</strong></summary>
+
+Set these repository Actions secrets:
+
+| Secret | Value |
 |---|---|
-| `KEYSTORE_B64` | Base64 of the existing mod signing keystore |
+| `KEYSTORE_B64` | Base64-encoded signing keystore |
 | `KS_PASS` | Keystore and private-key password |
 | `KS_ALIAS` | Signing alias |
 
-The scheduled workflow never creates a replacement key. PR checks have read-only permissions and cannot
-access signing secrets. Releases are public, including APK assets; source downloads, extracted game files,
-build directories and signing keys stay out of Git. APKPure is a third-party source; the original signing
-certificate, rather than the listing's authenticity claim, is the trust anchor.
+Keep the same key for future updates. The workflow refuses to generate a replacement identity. PR checks use read-only permissions and do not receive signing secrets.
 
-Local fetch and checks:
+APKPure is a third-party download source. CI checks the actual APK signatures against the pinned developer certificate rather than trusting the listing's certificate claim.
 
-```sh
-python3 ci/fetch_apk.py --list
+</details>
+
+## Build it yourself
+
+The tested toolchain uses **JDK 21**, **Apktool 2.12.1**, Android **build-tools 37.0.0**, **platform android-31**, and **NDK 30.0.16248370**, plus Python 3.10+, `curl` and `adb`.
+
+<details>
+<summary><strong>Fetch, verify, build and install</strong></summary>
+
+Run from the repository root with the Android SDK and NDK installed. The scripts accept `ANDROID_HOME` / `ANDROID_SDK_ROOT`, `ANDROID_NDK_HOME`, `BUILD_TOOLS`, `ANDROID_JAR` and `APKTOOL` overrides.
+
+```bash
+# Fetch the latest complete arm64 set and verify compatibility.
 python3 ci/fetch_apk.py --output build/upstream
 python3 ci/check_apks.py build/upstream
+
+# Use an existing signing key. Store and private-key passwords must match here.
+export KEYSTORE="$PWD/build/mod.keystore" KS_ALIAS=mod
+read -r -s -p 'Keystore password: ' KS_PASS; export KS_PASS; echo
+
+# Build, inject the menu, align and sign every split.
 PULLED_DIR="$PWD/build/upstream" bash work/mod/build_release.sh
+
+# Install over a build signed with the same key.
+adb install-multiple -r work/mod/out/release/*.apk
+```
+
+For a first build without an existing key, create one deliberately before running the build script:
+
+```sh
+mkdir -p build
+keytool -genkeypair -keystore build/mod.keystore -alias mod \
+  -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=TOE3 Mod'
+```
+
+Enter the same password in the build step. Do not commit the keystore. A different key cannot update an existing installation signed with another key.
+
+The build scripts also accept a genuine, compatible APK set pulled from your own device through `PULLED_DIR`. Already-modded input and incomplete split sets are rejected.
+
+</details>
+
+<details>
+<summary><strong>Source map and reverse-engineering tools</strong></summary>
+
+| Path | Responsibility |
+|---|---|
+| [`work/mod/src/`](work/mod/src/) | Native core and feature modules for economy, fuel, damage, fatigue, jobs, shopping, truck performance and world state |
+| [`work/mod/src/mod.h`](work/mod/src/mod.h) | Shared feature, hook, memory-field and byte-patch API |
+| [`work/mod/java/com/toemod/`](work/mod/java/com/toemod/) | Floating menu, controls and JNI bridge |
+| [`work/mod/claims.txt`](work/mod/claims.txt) | Hook-entry and patch-range ownership |
+| [`work/mod/build_native.sh`](work/mod/build_native.sh) | Compile `libtoemod.so` for arm64 |
+| [`work/mod/build_base.sh`](work/mod/build_base.sh) | Inject the menu into the base APK |
+| [`work/mod/build_release.sh`](work/mod/build_release.sh) | Compatibility-gated build, alignment, signing and output verification |
+| [`ci/`](ci/) | Upstream fetcher, compatibility baseline, validation and regression tests |
+| [`work/re.py`](work/re.py) | Method lookup, disassembly, caller search and field references over a local Cpp2IL dump |
+
+The reviewed game uses Unity 2022.3 / IL2CPP. Mod addresses are virtual addresses; in this build's code segment, `vaddr = Cpp2IL RVA + 0x4000`. That mapping is build-specific, not a rule for arbitrary ELF files.
+
+For reverse engineering, extract your own `libil2cpp.so` and `global-metadata.dat`, then generate an address-annotated C# dump with [Cpp2IL](https://github.com/SamboyCoding/Cpp2IL) using `--use-processor attributeinjector --output-as diffable-cs --output-to work/cs` alongside its binary, metadata and Unity-version arguments. The dump and extracted game files stay out of Git.
+
+</details>
+
+## Verification & limits
+
+The offline suite covers **111 cases** around download parsing, redirect boundaries, package identity, signatures, native compatibility and incomplete APK sets:
+
+```sh
 python3 -m unittest discover -s ci -p 'test_*.py' -v
 ```
 
-## Disclaimer
+The [end-to-end release run](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677161415) exercised fetching, compatibility checks, compilation, menu injection, signing and public publication. A [manual rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238) verified the existing-release skip path.
 
-For personal, offline use on your own device. Not affiliated with Wanda Software.
+The menu and hook startup have been smoke-tested on an arm64 Huawei tablet. **Not every gameplay control has been exercised in play.** Passing CI proves packaging and signing checks, not complete gameplay correctness. Performance, traffic and reward changes need in-game testing before relying on them.
+
+## Credits
+
+- [Wanda Software](https://play.google.com/store/apps/details?id=com.WandaSoftware.TruckersofEurope3) created Truckers of Europe 3.
+- [And64InlineHook](https://github.com/Rprop/And64InlineHook) by Rprop provides ARM64 inline hooking; its vendored files retain their MIT license notice.
+- [Cpp2IL](https://github.com/SamboyCoding/Cpp2IL) provides the metadata and method-mapping workflow used during reverse engineering.
+- [Apktool](https://github.com/iBotPeaches/Apktool) handles the Android bytecode round trip for menu injection.
+
+An independent project for personal, offline experimentation. Not affiliated with or endorsed by Wanda Software.
