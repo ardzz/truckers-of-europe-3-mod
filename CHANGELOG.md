@@ -4,7 +4,9 @@ Notable changes to TOE3 Stormline, newest first. Every GitHub release also lists
 
 Release tags have the form `toe3-v<game version>-b<game build>-mod-<source revision>`. Record a change under **Unreleased** in the same commit as the change. Once CI publishes the release, rename that heading to the release tag. Commits that only edit this file or the promotional artwork do not trigger a new build or update.
 
-## Unreleased
+## [toe3-v0.7.64-b193-mod-7f0d995] - 2026-10-15
+
+Game 0.7.64 (build 193), mod build 7. Source [`7f0d995`](https://github.com/ardzz/truckers-of-europe-3-mod/commit/7f0d9954d7501ccb32076848a29b17d1d6b0705a).
 
 ### Added
 
@@ -79,3 +81,4 @@ First published release, for game 0.7.64 (build 193) on arm64-v8a. Source [`2141
 [toe3-v0.7.64-b193-mod-f4e2100]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-f4e2100
 [toe3-v0.7.64-b193-mod-2141bcc]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-2141bcc
 [toe3-v0.7.64-b193-mod-da547e1]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-da547e1
+[toe3-v0.7.64-b193-mod-7f0d995]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-7f0d995

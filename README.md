@@ -14,7 +14,7 @@
 
 <p>
   <a href="https://github.com/ardzz/truckers-of-europe-3-mod/releases/latest"><strong>Download the mod</strong></a>
-  · <a href="#demo">Live demo</a>
+  · <a href="#demo">Screenshots</a>
   · <a href="#features">Features</a>
   · <a href="#how-it-works">How it works</a>
   · <a href="#in-app-updates">OTA updates</a>
@@ -220,7 +220,7 @@ The offline suite covers download parsing, redirect boundaries, package identity
 python3 -m unittest discover -s ci -p 'test_*.py' -v
 ```
 
-The [end-to-end release run](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677161415) exercised fetching, compatibility checks, compilation, menu injection, signing and public publication. A [manual rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238) verified the existing-release skip path.
+The [integrated release run](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38757531878) passed the 148-test suite, fetched the genuine split set, checked compatibility, compiled the focused-screen/native-diagnostics build, signed it and published mod build 7. A previous [manual rerun](https://github.com/ardzz/truckers-of-europe-3-mod/actions/runs/38677407238) verified the existing-release skip path.
 
 Device smoke coverage on the Huawei Android 12 tablet includes focused navigation, live Runtime/Weather/Truck readings, missing weather data outside the driving scene, the in-game changelog, collapse/reopen and activity resume. A single Rainy selection during Foggy weather reached actual Rainy without another toggle; the existing fade and ramp took about four minutes. A successful OTA installation was also confirmed on this tablet.
 
