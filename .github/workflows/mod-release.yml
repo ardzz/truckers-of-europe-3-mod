@@ -6,12 +6,14 @@ on:
   paths:
    - "ci/**"
    - "work/mod/**"
+   - "tests/**"
    - "assets/artwork/launcher-icon.png"
    - ".github/workflows/mod-release.yml"
  pull_request:
   paths:
    - "ci/**"
    - "work/mod/**"
+   - "tests/**"
    - "assets/artwork/launcher-icon.png"
    - ".github/workflows/mod-release.yml"
  schedule:
@@ -216,7 +218,7 @@ jobs:
 
       Money, gold, wash tickets, level, rain and rain-dirt prevention start enabled; every other control starts off. Settings persist between launches, and the **Mods** switch turns gameplay changes off together. Disabling a control does not undo purchases, rewards or saved progress.
 
-      The panel uses focused **Home**, mod-category, **World**, **Updates** and **Debug** screens. World shows requested versus actual weather and transition progress. Debug is a read-only viewer for cached Runtime, Weather and Truck data, with sample age and unavailable/stale states.
+      The panel uses focused **Home**, mod-category, **World**, **Cloud**, **Updates** and **Debug** screens. World shows requested versus actual weather and transition progress. Cloud backs up the game save to `Download/TOE3Stormline/backups` and restores it. Debug is a read-only viewer for cached Runtime, Weather and Truck data, with sample age and unavailable/stale states.
 
       Not every control has been tested in gameplay. CI checks packaging, signatures and checksums; it does not play the game.
 
@@ -248,7 +250,7 @@ jobs:
 
       - **Updating this mod:** releases are signed with the same mod key, so a new release installs over an earlier one and keeps its local data.
       - **Switching from the official store build:** the signing key differs, so Android rejects the install until that build is uninstalled. Uninstalling deletes its local save. Back up anything you can recover first.
-      - **Google Play Games:** sign-in and cloud saves do not work with the re-signed APKs, including through microG.
+      - **Google Play Games:** sign-in and cloud saves do not work with the re-signed APKs, including through microG. The game's **Save** and **Load** buttons use the mod's backups instead: the menu's **Cloud** tab backs up the whole save, restores a backup after showing where it came from, and keeps automatic backups when you leave the game.
 
       ### Provenance
 

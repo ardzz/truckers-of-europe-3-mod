@@ -165,8 +165,9 @@ public final class MenuModelTest {
     private static void pollingChecks() {
         check("World on screen reads diagnostics", () -> truth(MenuModel.needsSnapshot(MenuModel.Page.WORLD, true, true)));
         check("Debug on screen reads diagnostics", () -> truth(MenuModel.needsSnapshot(MenuModel.Page.DEBUG, true, true)));
-        check("Home, categories and Updates never read diagnostics", () -> {
-            for (MenuModel.Page p : new MenuModel.Page[] {MenuModel.Page.HOME, MenuModel.Page.CATEGORY, MenuModel.Page.UPDATES}) {
+        check("Home, categories, Cloud and Updates never read diagnostics", () -> {
+            for (MenuModel.Page p : new MenuModel.Page[] {MenuModel.Page.HOME, MenuModel.Page.CATEGORY, MenuModel.Page.CLOUD,
+                    MenuModel.Page.UPDATES}) {
                 truth(!MenuModel.needsSnapshot(p, true, true));
             }
         });

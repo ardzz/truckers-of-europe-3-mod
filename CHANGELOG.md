@@ -4,6 +4,37 @@ Notable changes to TOE3 Stormline, newest first. Releases embed the matching sec
 
 Mod versions use **Semantic Versioning**, starting at `v0.1.0`, independently of the upstream game's version. CI derives the next version from build-input commits: breaking changes raise major, `feat:` raises minor, and other changes raise patch. A compatible upstream-only rebuild raises patch; unchanged inputs are skipped. Numeric `mod_build` remains the OTA ordering counter. Historical `toe3-v…-b…-mod-…` tags stay intact.
 
+## [v0.2.0] - 2026-10-21
+
+Game 0.7.64 (build 193).
+
+### Added
+
+- On-device backups of the whole game save in `Download/TOE3Stormline/backups`, replacing Google Play Games cloud saves, which cannot sign in to the re-signed APK. They work with **Mods** off.
+- The game's own **Save** button backs up after the game saves; its **Load** button opens the restore list.
+- A **Cloud** tab: **Back up now** (the game saves first, so the backup includes the last moments of play), **Restore a backup**, **Restore from a file** through Android's file picker and, on Android 6–9, **Allow storage access**.
+- An automatic backup when leaving the game, at most every 10 minutes. The 5 newest automatic backups are kept; manual and pre-restore backups are never deleted.
+- Restores show when, on which device and with which game build a backup was made, back up the current save first and restart the game. Backups from a newer game build are refused; older ones restore after a warning.
+
+### Compatibility
+
+- Backups are gzip-compressed `toe3-prefs-snapshot` v1 JSON with every PlayerPrefs value and its type. Only single-member gzip files with valid UTF-8 are accepted, up to 64 MiB compressed and 16 MiB of JSON.
+- No manifest, permission or resource changes. The OTA updater, package name and signing key are unchanged.
+
+### Verified
+
+- 162 host tests, including 78 snapshot-format and backup-policy checks, Java compilation with all warnings as errors and the signed release build passed.
+- On the Huawei Android 12 tablet: all three new hooks installed beside the existing ones; the game's Save button wrote a 128-value manual backup with a toast and its Load button opened the restore list.
+- **Back up now** captured a language change made 1.4 s earlier, with **Mods** on and off. Pressing Home wrote an automatic backup; a second Home within 10 minutes did not, and one after exactly 10 minutes did.
+- Restoring from the list and from a file picked in Android's file picker each wrote a pre-restore backup, restarted the game within a second and brought back the backed-up language. Cancelling the picker or the confirmation changed nothing.
+- A file that is not a backup and a backup from game build 194 were refused with their explanations. Backups written by other apps in the folder were neither listed nor deleted by rotation.
+
+### Known limitations
+
+- Android 6–9 storage paths and deleting this install's own sixth automatic backup were checked by host tests and review, not on a device.
+- Android 6–9 has no per-app file ownership, so the restore list and rotation include every backup in the folder there.
+- Backup names use local time; when clocks go back an hour, automatic backups from the repeated hour may rotate out of order.
+
 ## [v0.1.0] - 2026-10-15
 
 Game 0.7.64 (build 193), CI build 8.
@@ -108,3 +139,4 @@ First published release, for game 0.7.64 (build 193) on arm64-v8a. Source [`2141
 [toe3-v0.7.64-b193-mod-da547e1]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-da547e1
 [toe3-v0.7.64-b193-mod-7f0d995]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/toe3-v0.7.64-b193-mod-7f0d995
 [v0.1.0]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/v0.1.0
+[v0.2.0]: https://github.com/ardzz/truckers-of-europe-3-mod/releases/tag/v0.2.0

@@ -18,4 +18,12 @@ public final class Native {
 
     /** Fills a reusable 32-value buffer with cached diagnostics; NaN means no sample. */
     public static native void debugSnapshot(double[] values);
+
+    /** Asks the Unity thread to save PlayerPrefs, then call {@link #onGameCloud} with FLUSHED. Any thread. */
+    public static native void requestFlush();
+
+    /** Called by libtoemod.so on the Unity thread; see {@link CloudController#onGameCloud}. */
+    static boolean onGameCloud(int action) {
+        return CloudController.onGameCloud(action);
+    }
 }
