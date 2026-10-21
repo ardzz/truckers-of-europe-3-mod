@@ -20,10 +20,7 @@ import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
 
-import org.json.JSONArray;
 import org.json.JSONException;
-import org.json.JSONObject;
-import org.json.JSONTokener;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -38,9 +35,6 @@ import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -839,34 +833,12 @@ final class Updater {
 
     private static Map<String, Object> json(byte[] raw, String what) throws UpdateException {
         try {
-            JSONTokener t = new JSONTokener(new String(raw, StandardCharsets.UTF_8));
-            Object v = t.nextValue();
-            if (!(v instanceof JSONObject) || t.nextClean() != 0) throw new UpdateException(what + " is not a single JSON object");
-            return toMap((JSONObject) v);
+            Map<String, Object> m = JsonMaps.object(new String(raw, StandardCharsets.UTF_8));
+            if (m == null) throw new UpdateException(what + " is not a single JSON object");
+            return m;
         } catch (JSONException e) {
             throw new UpdateException(what + " is not valid JSON (" + e.getMessage() + ")");
         }
-    }
-
-    private static Map<String, Object> toMap(JSONObject o) throws JSONException {
-        Map<String, Object> m = new LinkedHashMap<>();
-        Iterator<String> keys = o.keys();
-        while (keys.hasNext()) {
-            String k = keys.next();
-            m.put(k, plain(o.get(k)));
-        }
-        return m;
-    }
-
-    private static Object plain(Object v) throws JSONException {
-        if (v instanceof JSONObject) return toMap((JSONObject) v);
-        if (v instanceof JSONArray) {
-            JSONArray a = (JSONArray) v;
-            List<Object> l = new ArrayList<>(a.length());
-            for (int i = 0; i < a.length(); i++) l.add(plain(a.get(i)));
-            return l;
-        }
-        return v == JSONObject.NULL ? null : v;
     }
 
     @SuppressWarnings("deprecation") // versionCode before API 28
