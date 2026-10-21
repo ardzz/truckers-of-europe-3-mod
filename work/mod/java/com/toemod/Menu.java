@@ -71,9 +71,9 @@ import java.util.Map;
  * through to the Unity player.
  *
  * The panel shows one screen at a time between a fixed header and a fixed bottom bar
- * (Home / World / Updates / Debug); each Home category opens its own screen. Updates and Debug
- * work independently of the native hooks and the Mods switch, so a broken or disabled mod can
- * still be inspected and updated.
+ * (Home / World / Cloud / Updates / Debug); each Home category opens its own screen. Cloud,
+ * Updates and Debug work independently of the Mods switch, and Updates and Debug also of the
+ * native hooks, so a broken or disabled mod can still be backed up, inspected and updated.
  */
 public final class Menu {
     static final String TAG = "toemod";
@@ -105,9 +105,9 @@ public final class Menu {
     private static final int TOUCH_DP = 44;
     private static final float MAX_H_FRACTION = 0.8f;
 
-    private static final Page[] TABS = {Page.HOME, Page.WORLD, Page.UPDATES, Page.DEBUG};
-    private static final String[] TAB_NAMES = {"Home", "World", "Updates", "Debug"};
-    private static final int UPDATES_TAB = 2;
+    private static final Page[] TABS = {Page.HOME, Page.WORLD, Page.CLOUD, Page.UPDATES, Page.DEBUG};
+    private static final String[] TAB_NAMES = {"Home", "World", "Cloud", "Updates", "Debug"};
+    private static final int UPDATES_TAB = 3;
     private static final String[] DEBUG_NAMES = {"Runtime", "Weather", "Truck"};
     private static final int DEBUG_RUNTIME = 0;
     private static final int DEBUG_WEATHER = 1;
@@ -148,6 +148,23 @@ public final class Menu {
             renderUpdates();
         }
     };
+    private final CloudController cloud;
+    private final CloudController.Listener cloudListener = new CloudController.Listener() {
+        @Override
+        public void onCloudChanged() {
+            renderCloud();
+        }
+
+        @Override
+        public void onBackupsListed(List<LocalBackups.Backup> backups) {
+            showBackups(backups);
+        }
+
+        @Override
+        public void onRestoreReady(String source, SnapshotFormat.Snapshot snapshot, long installedBuild) {
+            askRestore(source, snapshot, installedBuild);
+        }
+    };
 
     private boolean master;
     private float posFx;
@@ -179,6 +196,7 @@ public final class Menu {
     private FrameLayout pages;
     private ScrollView homePage;
     private ScrollView worldPage;
+    private ScrollView cloudPage;
     private ScrollView updatesPage;
     private ScrollView debugPage;
 
@@ -206,6 +224,15 @@ public final class Menu {
     private TextView upChanges;
     private AlertDialog changesDialog;
     private AlertDialog valueDialog;
+
+    private TextView cloudWhere;
+    private TextView cloudStatus;
+    private TextView cloudLastAuto;
+    private TextView cloudBackup;
+    private TextView cloudRestore;
+    private TextView cloudImport;
+    private TextView cloudStorage;
+    private AlertDialog cloudDialog;
 
     public static void start(Activity a) {
         try {
@@ -245,6 +272,7 @@ public final class Menu {
         posFx = prefs.getFloat(K_POS_X, 0f);
         posFy = prefs.getFloat(K_POS_Y, 0.3f);
         updater = Updater.get(a);
+        cloud = CloudController.get(a);
         Arrays.fill(snapshot, Double.NaN);
         lifecycle = new Application.ActivityLifecycleCallbacks() {
             @Override public void onActivityCreated(Activity act, Bundle b) {}
@@ -261,7 +289,9 @@ public final class Menu {
                 resumed = false;
                 updatePolling();
             }
-            @Override public void onActivityStopped(Activity act) {}
+            @Override public void onActivityStopped(Activity act) {
+                if (act == activity) cloud.onStop();
+            }
             @Override public void onActivitySaveInstanceState(Activity act, Bundle b) {}
             @Override public void onActivityDestroyed(Activity act) {
                 if (act == activity) destroy();
@@ -332,6 +362,8 @@ public final class Menu {
         refreshHome();
         updater.setListener(updaterListener);
         renderUpdates();
+        cloud.setListener(cloudListener);
+        renderCloud();
         showPage(sPage, sCategory);
     }
 
@@ -342,7 +374,10 @@ public final class Menu {
         changesDialog = null;
         if (valueDialog != null) valueDialog.dismiss();
         valueDialog = null;
+        if (cloudDialog != null) cloudDialog.dismiss();
+        cloudDialog = null;
         updater.clearListener(updaterListener);
+        cloud.clearListener(cloudListener);
         activity.getApplication().unregisterActivityLifecycleCallbacks(lifecycle);
         if (root != null && root.getParent() instanceof ViewGroup) ((ViewGroup) root.getParent()).removeView(root);
         if (sCurrent == this) sCurrent = null;
@@ -775,6 +810,9 @@ public final class Menu {
             case WORLD:
                 target = worldPage;
                 break;
+            case CLOUD:
+                target = cloudPage;
+                break;
             case UPDATES:
                 target = updatesPage;
                 break;
@@ -919,9 +957,10 @@ public final class Menu {
         pages = new FrameLayout(ctx);
         homePage = buildHome();
         worldPage = buildWorld();
+        cloudPage = buildCloud();
         updatesPage = buildUpdates();
         debugPage = buildDebug();
-        for (View v : new View[] {homePage, worldPage, updatesPage, debugPage}) pages.addView(v, matchMatch());
+        for (View v : new View[] {homePage, worldPage, cloudPage, updatesPage, debugPage}) pages.addView(v, matchMatch());
         // Takes exactly the height between header and tab bar, so the tab bar never moves.
         p.addView(pages, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         p.addView(divider());
@@ -1465,6 +1504,166 @@ public final class Menu {
         changesDialog = b.setTitle("TOE3 Stormline changelog")
                 .setView(scroll)
                 .setPositiveButton("Close", null)
+                .show();
+    }
+
+    // ------------------------------------------------------------------ cloud
+
+    /** The game's Load button: opens the panel on the Cloud tab's restore list. False when no menu is showing. */
+    static boolean openCloud() {
+        Menu m = sCurrent;
+        if (m == null || m.panel == null || m.activity.isFinishing() || m.activity.isDestroyed()) return false;
+        m.ensureAttached();
+        m.expand();
+        m.showPage(Page.CLOUD, null);
+        m.cloud.listBackups();
+        return true;
+    }
+
+    private ScrollView buildCloud() {
+        LinearLayout content = pageContent();
+        LinearLayout card = card();
+        TextView title = label(15, TEXT);
+        title.setText("Backups on this device");
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        card.addView(title, matchWrap());
+        cloudWhere = label(13, TEXT_DIM);
+        cloudWhere.setPadding(0, dp(4), 0, 0);
+        card.addView(cloudWhere, matchWrap());
+        cloudLastAuto = label(13, TEXT_DIM);
+        card.addView(cloudLastAuto, matchWrap());
+        cloudStatus = label(14, TEXT);
+        cloudStatus.setPadding(0, dp(6), 0, 0);
+        card.addView(cloudStatus, matchWrap());
+        content.addView(card, cardParams());
+
+        cloudBackup = action("Back up now", true, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cloud.backupNow();
+            }
+        });
+        cloudRestore = action("Restore a backup", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cloud.listBackups();
+            }
+        });
+        cloudImport = action("Restore from a file", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cloud.importFile(activity);
+            }
+        });
+        cloudStorage = action("Allow storage access", false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cloud.requestStorage(activity);
+            }
+        });
+        for (TextView b : new TextView[] {cloudBackup, cloudRestore, cloudImport, cloudStorage}) content.addView(b, rowParams());
+        TextView note = label(12, TEXT_DIM);
+        note.setText("The game's Save button backs up too, and its Load button opens the restore list. Leaving the game"
+                + " backs up automatically at most every 10 minutes and keeps the 5 newest automatic backups; manual and"
+                + " pre-restore backups are never deleted. Backups work even with Mods off.");
+        content.addView(note, matchWrap());
+        return scroll(content);
+    }
+
+    private void renderCloud() {
+        if (cloudStatus == null) return;
+        boolean shared = cloud.sharedFolder();
+        setText(cloudWhere, shared ? "Saved to " + LocalBackups.FOLDER + "."
+                : "Saved in the game's own folder, which Android deletes with the game. Allow storage access to use "
+                        + LocalBackups.FOLDER + " instead.");
+        setColor(cloudWhere, shared ? TEXT_DIM : ACCENT);
+        long last = cloud.lastAutoBackup();
+        setText(cloudLastAuto, last > 0 ? "Last automatic backup: "
+                + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(last) : "");
+        show(cloudLastAuto, last > 0);
+        String msg = cloud.message();
+        setText(cloudStatus, msg);
+        setColor(cloudStatus, cloud.isError() ? ERROR : TEXT);
+        show(cloudStatus, !msg.isEmpty());
+        boolean busy = cloud.busy();
+        for (TextView b : new TextView[] {cloudBackup, cloudRestore, cloudImport}) {
+            b.setEnabled(!busy);
+            b.setAlpha(busy ? DIMMED : 1f);
+        }
+        show(cloudStorage, !shared);
+    }
+
+    private void showBackups(final List<LocalBackups.Backup> backups) {
+        if (activity.isFinishing() || activity.isDestroyed()) return;
+        if (cloudDialog != null) cloudDialog.dismiss();
+        AlertDialog.Builder b = new AlertDialog.Builder(activity, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Restore a backup")
+                .setNegativeButton("Close", null)
+                .setNeutralButton("From a file", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        cloud.importFile(activity);
+                    }
+                });
+        if (backups.isEmpty()) {
+            b.setMessage("No backups on this device yet. Choose \"From a file\" for a backup from another device or"
+                    + " an earlier install.");
+        } else {
+            String[] items = new String[backups.size()];
+            for (int i = 0; i < items.length; i++) {
+                items[i] = backups.get(i).name + " (" + Math.max(1, (backups.get(i).size + 512) / 1024) + " KB)";
+            }
+            b.setItems(items, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int which) {
+                    LocalBackups.Backup chosen = backups.get(which);
+                    cloud.prepareRestore(chosen.uri, chosen.name);
+                }
+            });
+        }
+        cloudDialog = b.show();
+    }
+
+    private void askRestore(String source, SnapshotFormat.Snapshot s, long installedBuild) {
+        if (activity.isFinishing() || activity.isDestroyed()) {
+            cloud.cancelRestore();
+            return;
+        }
+        if (cloudDialog != null) cloudDialog.dismiss();
+        SnapshotFormat.Meta m = s.meta;
+        StringBuilder text = new StringBuilder(source).append("\n\n");
+        text.append("Made ").append(m.createdAt.isEmpty() ? "at an unknown time" : m.createdAt.replace('T', ' ').replace("Z", " UTC"));
+        if (!m.reason.isEmpty()) text.append(" (").append(m.reason).append(')');
+        if (!m.device.isEmpty()) text.append(" on ").append(m.device);
+        text.append("\nGame ").append(m.gameVersion.isEmpty() ? "?" : m.gameVersion).append(" (build ").append(m.gameBuild).append(')');
+        if (!m.modVersion.isEmpty()) text.append(", mod ").append(m.modVersion);
+        text.append("\n").append(s.prefs.size()).append(" saved values");
+        if (s.olderThan(installedBuild)) {
+            text.append("\n\nThis backup comes from an older game build than the installed build ").append(installedBuild)
+                    .append(". The game may not read all of it.");
+        }
+        text.append("\n\nThe current save is backed up first, then the game restarts with the restored save.");
+        cloudDialog = new AlertDialog.Builder(activity, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Restore this backup?")
+                .setMessage(text)
+                .setPositiveButton("Restore and restart", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        cloud.confirmRestore();
+                    }
+                })
+                .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        cloud.cancelRestore();
+                    }
+                })
+                .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface d) {
+                        cloud.cancelRestore();
+                    }
+                })
                 .show();
     }
 

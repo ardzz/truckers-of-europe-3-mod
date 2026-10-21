@@ -5,7 +5,7 @@ package com.toemod;
  * when live diagnostics may be read, and exact value entry within a control's native range.
  */
 final class MenuModel {
-    enum Page { HOME, CATEGORY, WORLD, UPDATES, DEBUG }
+    enum Page { HOME, CATEGORY, WORLD, CLOUD, UPDATES, DEBUG }
 
     /** Category whose controls live on the World tab instead of a Home row. */
     static final String WORLD = "World";
