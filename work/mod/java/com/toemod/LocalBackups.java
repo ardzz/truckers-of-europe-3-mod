@@ -156,11 +156,17 @@ final class LocalBackups {
         return new Backup(f.getName(), Uri.fromFile(f), data.length);
     }
 
+    /**
+     * Only rows this install owns: Android 10 with legacy storage access would otherwise return every file in
+     * the folder, and rotation must never delete another install's backups. The owner column exists from
+     * Android 10; the constant is inlined at compile time.
+     */
     private static void listMediaStore(Context c, List<Backup> all) {
         String[] cols = {MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE};
-        String where = MediaStore.MediaColumns.RELATIVE_PATH + "=? AND " + MediaStore.MediaColumns.IS_PENDING + "=0";
+        String where = MediaStore.MediaColumns.RELATIVE_PATH + "=? AND " + MediaStore.MediaColumns.IS_PENDING + "=0 AND "
+                + MediaStore.MediaColumns.OWNER_PACKAGE_NAME + "=?";
         try (Cursor cur = c.getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cols, where,
-                new String[] {FOLDER + "/"}, null)) {
+                new String[] {FOLDER + "/", c.getPackageName()}, null)) {
             if (cur == null) return;
             while (cur.moveToNext()) {
                 String name = cur.getString(1);

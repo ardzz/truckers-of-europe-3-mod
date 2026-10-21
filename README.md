@@ -80,8 +80,8 @@ Weather changes are accepted on the next sky update, but visual changes still fo
 Google Play Games cloud saves cannot sign in to the re-signed APK, so the mod keeps compressed copies of the whole game save on the device instead, in `Download/TOE3Stormline/backups`:
 
 - **Cloud → Back up now**, or the game's own **Save** button, writes `toe3-YYYYMMDD-HHMMSS-manual.json.gz`. The game saves first, so the backup includes the last moments of play.
-- Leaving the game writes an automatic backup at most every 10 minutes. The 5 newest automatic backups are kept; the mod never deletes manual or pre-restore backups.
-- **Restore a backup**, or the game's **Load** button, lists the backups this install wrote. **Restore from a file** opens any backup through Android's file picker, for example one copied from another device or an earlier install.
+- Leaving the game writes an automatic backup at most every 10 minutes. The 5 newest automatic backups are kept; the mod never deletes manual or pre-restore backups. On Android 6–9 the folder has no per-app ownership, so keep automatic backups copied from elsewhere in another folder.
+- **Restore a backup**, or the game's **Load** button, lists the backups this install wrote (on Android 6–9, every backup in the folder). **Restore from a file** opens any backup through Android's file picker, for example one copied from another device or an earlier install.
 - Before restoring, the mod shows when, on which device and with which game build the backup was made. It then backs up the current save (`…-prerestore.json.gz`), writes the backup and restarts the game.
 - Backups from a newer game build are refused; backups from an older build restore after a warning.
 
