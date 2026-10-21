@@ -60,3 +60,6 @@
 0x193a610 patch:4 perf UIButtons::CruiseControlIncrease (no_speed_limit: cruise +button cap 121 -> 251)
 0x193a64c patch:4 perf UIButtons::CruiseControlIncrease (no_speed_limit: cruise setpoint cap 120 -> 250)
 0x19b2dbc entry debug TruckController::Update (diagnostics: copy speed/fuel/health/dirt/isRaining after orig; read-only)
+0x1b44a94 entry cloud CloudSave::Save (PlayerPrefs.Save, then the mod's backup instead of Google Play Games)
+0x1b46708 entry cloud CloudSave::Load (opens the mod's restore list instead of Google Play Games)
+0x379f820 entry cloud EventSystem::Update (after orig: consume a menu flush request, PlayerPrefs.Save, report to Java)

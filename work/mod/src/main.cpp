@@ -1,6 +1,7 @@
 // Native core: libil2cpp discovery, inline hooks, toggleable byte patches,
 // feature registry and the JNI bridge used by com.toemod.Menu.
 #include "mod.h"
+#include "cloud.h"
 #include "debug.h"
 #include "../third_party/And64InlineHook.hpp"
 
@@ -209,6 +210,36 @@ static void jni_debug_snapshot(JNIEnv* env, jclass, jdoubleArray values) {
     env->SetDoubleArrayRegion(values, 0, DEBUG_VALUES, sample);
 }
 
+static void jni_request_flush(JNIEnv*, jclass) { cloud_request_flush(); }
+
+// ---------------------------------------------------------------- Java upcall
+// Resolved once in JNI_OnLoad (FindClass needs the app class loader, which native threads lack).
+// g_vm is published last, so a non-null load sees the class and method too.
+static std::atomic<JavaVM*> g_vm{nullptr};
+static jclass g_native_cls = nullptr;
+static jmethodID g_on_game_cloud = nullptr;  // static boolean Native.onGameCloud(int)
+
+bool cloud_upcall(int action) {
+    JavaVM* vm = g_vm.load(std::memory_order_acquire);
+    if (!vm) return false;
+    JNIEnv* env = nullptr;
+    jint st = vm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (st == JNI_EDETACHED) {
+        // Only the Unity main thread calls this; it is normally attached already and lives as long as
+        // the process, so a thread attached here is never detached.
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return false;
+    } else if (st != JNI_OK) {
+        return false;
+    }
+    jboolean taken = env->CallStaticBooleanMethod(g_native_cls, g_on_game_cloud, (jint)action);
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        return false;
+    }
+    return taken == JNI_TRUE;
+}
+
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     JNIEnv* env = nullptr;
     if (vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
@@ -219,8 +250,14 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
         {"set", "(Ljava/lang/String;ZF)V", (void*)jni_set},
         {"ready", "()Z", (void*)jni_ready},
         {"debugSnapshot", "([D)V", (void*)jni_debug_snapshot},
+        {"requestFlush", "()V", (void*)jni_request_flush},
     };
     if (env->RegisterNatives(cls, methods, sizeof methods / sizeof methods[0]) != 0) return JNI_ERR;
+    g_on_game_cloud = env->GetStaticMethodID(cls, "onGameCloud", "(I)Z");
+    if (!g_on_game_cloud) env->ExceptionClear();  // NoSuchMethodError: leave the game's buttons alone
+    else g_native_cls = (jclass)env->NewGlobalRef(cls);
+    if (g_native_cls) g_vm.store(vm, std::memory_order_release);
+    else mlog("cloud: Native.onGameCloud unavailable; the game's Save/Load buttons keep their own behaviour");
     pthread_t t;
     pthread_create(&t, nullptr, install_thread, nullptr);
     pthread_detach(t);
