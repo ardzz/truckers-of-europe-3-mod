@@ -136,17 +136,22 @@ final class LocalBackups {
         return new Backup(name, uri, data.length);
     }
 
+    /** Android 6-9: writes beside the target, then renames; never replaces an existing backup or leaves a .tmp. */
     private static Backup writeFile(File f, byte[] data) throws IOException {
         File dir = f.getParentFile();
         if (dir == null || (!dir.isDirectory() && !dir.mkdirs())) throw new IOException("cannot create " + dir);
+        if (f.exists()) throw new IOException(f.getName() + " already exists; wait a second and try again");
         File tmp = new File(dir, f.getName() + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp)) {
-            out.write(data);
-            out.getFD().sync();
-        }
-        if (!tmp.renameTo(f)) {
-            if (!tmp.delete()) Log.w(TAG, "cloud: left " + tmp);
-            throw new IOException("cannot write " + f);
+        boolean renamed = false;
+        try {
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(data);
+                out.getFD().sync();
+            }
+            renamed = tmp.renameTo(f);
+            if (!renamed) throw new IOException("cannot write " + f);
+        } finally {
+            if (!renamed && tmp.exists() && !tmp.delete()) Log.w(TAG, "cloud: left " + tmp);
         }
         return new Backup(f.getName(), Uri.fromFile(f), data.length);
     }

@@ -159,8 +159,11 @@ final class CloudController {
         listener = l;
     }
 
+    /** Also forgets a restore waiting for confirmation: its dialog went with the listener. */
     void clearListener(Listener l) {
-        if (listener == l) listener = null;
+        if (listener != l) return;
+        listener = null;
+        pending = null;
     }
 
     boolean busy() {
@@ -292,9 +295,10 @@ final class CloudController {
 
             @Override
             void done(SnapshotFormat.Snapshot s) {
-                pending = s;
                 show("", false);
-                if (listener != null) listener.onRestoreReady(source, s, installedBuild);
+                if (listener == null) return; // nobody left to confirm it
+                pending = s;
+                listener.onRestoreReady(source, s, installedBuild);
             }
         });
     }

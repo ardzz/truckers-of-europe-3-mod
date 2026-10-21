@@ -258,6 +258,59 @@ public final class CloudPolicyTest {
         check("readAll accepts exactly its limit", () -> eq(10, SnapshotFormat.readAll(new ByteArrayInputStream(new byte[10]), 10).length));
         check("readAll refuses one byte more", () ->
                 expectSnapshotException(() -> SnapshotFormat.readAll(new ByteArrayInputStream(new byte[11]), 10), "larger than"));
+        check("decode refuses 100000 empty gzip members without recursing through them", () -> {
+            byte[] empty = gzipBytes(new byte[0]);
+            byte[] many = new byte[empty.length * 100_000];
+            for (int i = 0; i < 100_000; i++) System.arraycopy(empty, 0, many, i * empty.length, empty.length);
+            expectSnapshotException(() -> SnapshotFormat.gunzip(many), "not a TOE3 Stormline backup");
+        });
+        check("decode refuses a second gzip member", () -> {
+            byte[] one = SnapshotFormat.gzip("{\"a\":1}");
+            byte[] two = Arrays.copyOf(one, one.length * 2);
+            System.arraycopy(one, 0, two, one.length, one.length);
+            expectSnapshotException(() -> SnapshotFormat.gunzip(two), "not a TOE3 Stormline backup");
+        });
+        check("decode refuses bytes after the gzip trailer", () -> {
+            byte[] gz = SnapshotFormat.gzip("{\"a\":1}");
+            expectSnapshotException(() -> SnapshotFormat.gunzip(Arrays.copyOf(gz, gz.length + 1)), "not a TOE3 Stormline backup");
+        });
+        check("decode refuses a wrong CRC-32", () -> expectSnapshotException(() -> SnapshotFormat.gunzip(flipped(8)), "not a TOE3 Stormline backup"));
+        check("decode refuses a wrong inflated length", () -> expectSnapshotException(() -> SnapshotFormat.gunzip(flipped(4)), "not a TOE3 Stormline backup"));
+        check("decode refuses reserved gzip header flags", () -> {
+            byte[] gz = SnapshotFormat.gzip("{\"a\":1}");
+            gz[3] = 0x20;
+            expectSnapshotException(() -> SnapshotFormat.gunzip(gz), "not a TOE3 Stormline backup");
+        });
+        check("a gzip header with file name, extra field, comment and header CRC is read", () -> {
+            byte[] gz = SnapshotFormat.gzip("{\"a\":1}");
+            byte[] fields = {3, 0, 'x', 'y', 'z', 'b', '.', 'j', 's', 'o', 'n', 0, 'c', 0, 0x12, 0x34};
+            byte[] full = new byte[gz.length + fields.length];
+            System.arraycopy(gz, 0, full, 0, 10);
+            full[3] = 4 | 8 | 16 | 2;
+            System.arraycopy(fields, 0, full, 10, fields.length);
+            System.arraycopy(gz, 10, full, 10 + fields.length, gz.length - 10);
+            eq("{\"a\":1}", SnapshotFormat.gunzip(full));
+        });
+        check("decode refuses malformed UTF-8", () ->
+                expectSnapshotException(() -> SnapshotFormat.gunzip(gzipBytes(new byte[] {'"', (byte) 0xc3, '(', '"'})),
+                        "not a TOE3 Stormline backup"));
+        check("valid UTF-8 text is read as written", () ->
+                eq("\"\u00e9\"", SnapshotFormat.gunzip(gzipBytes("\"\u00e9\"".getBytes(StandardCharsets.UTF_8)))));
+    }
+
+    /** A small gzip snapshot with one byte of its 8-byte trailer changed, {@code fromEnd} bytes before the end. */
+    private static byte[] flipped(int fromEnd) {
+        byte[] gz = SnapshotFormat.gzip("{\"a\":1}");
+        gz[gz.length - fromEnd] ^= 1;
+        return gz;
+    }
+
+    private static byte[] gzipBytes(byte[] raw) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (GZIPOutputStream gz = new GZIPOutputStream(bos)) {
+            gz.write(raw);
+        }
+        return bos.toByteArray();
     }
 
     private static void notABackup(String name, byte[] data) {

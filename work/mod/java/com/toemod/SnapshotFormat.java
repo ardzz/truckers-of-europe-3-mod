@@ -1,9 +1,11 @@
 package com.toemod;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Collections;
@@ -16,8 +18,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.TreeSet;
-import java.util.zip.GZIPInputStream;
+import java.util.zip.CRC32;
+import java.util.zip.DataFormatException;
 import java.util.zip.GZIPOutputStream;
+import java.util.zip.Inflater;
 
 /**
  * The toe3-prefs-snapshot v1 format: every game PlayerPrefs value as gzip-compressed JSON.
@@ -273,13 +277,61 @@ final class SnapshotFormat {
         return bos.toByteArray();
     }
 
-    /** The JSON inside a gzip snapshot; refuses anything that is not gzip or inflates past {@link #MAX_JSON_BYTES}. */
+    /**
+     * The JSON inside a gzip snapshot. Accepts exactly one gzip member (RFC 1952) with a matching CRC-32 and
+     * length and nothing after it, inflating at most {@link #MAX_JSON_BYTES}, and refuses text that is not
+     * valid UTF-8. Decoded with Inflater directly: GZIPInputStream recurses once per extra member, so a file
+     * of many empty members would overflow the stack before any size limit applied.
+     */
     static String gunzip(byte[] gz) throws SnapshotException {
-        try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(gz))) {
-            return new String(readAll(in, MAX_JSON_BYTES), StandardCharsets.UTF_8);
-        } catch (IOException e) {
+        Inflater inf = new Inflater(true);
+        try {
+            int start = gzipHeaderEnd(gz);
+            inf.setInput(gz, start, gz.length - start);
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(gz.length * 8, MAX_JSON_BYTES));
+            byte[] buf = new byte[64 * 1024];
+            while (!inf.finished()) {
+                int n = inf.inflate(buf);
+                if (n == 0 && (inf.needsInput() || inf.needsDictionary())) throw new SnapshotException(NOT_A_BACKUP);
+                if (out.size() + n > MAX_JSON_BYTES) throw new SnapshotException("This backup is larger than 16 MiB.");
+                out.write(buf, 0, n);
+            }
+            byte[] json = out.toByteArray();
+            int trailer = gz.length - inf.getRemaining();
+            CRC32 crc = new CRC32();
+            crc.update(json, 0, json.length);
+            if (gz.length - trailer != 8 || le32(gz, trailer) != (int) crc.getValue() || le32(gz, trailer + 4) != json.length) {
+                throw new SnapshotException(NOT_A_BACKUP);
+            }
+            return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(json)).toString();
+        } catch (DataFormatException | CharacterCodingException e) {
+            throw new SnapshotException(NOT_A_BACKUP);
+        } finally {
+            inf.end();
+        }
+    }
+
+    /** Offset of the deflate data after a gzip member header (RFC 1952 section 2.3). */
+    private static int gzipHeaderEnd(byte[] gz) throws SnapshotException {
+        if (gz.length < 18 || (gz[0] & 0xff) != 0x1f || (gz[1] & 0xff) != 0x8b || gz[2] != 8 || (gz[3] & 0xe0) != 0) {
             throw new SnapshotException(NOT_A_BACKUP);
         }
+        int flags = gz[3];
+        long p = 10;
+        if ((flags & 4) != 0) p = p + 2 + ((gz[10] & 0xff) | (gz[11] & 0xff) << 8); // FEXTRA
+        for (int bit : new int[] {8, 16}) { // FNAME, FCOMMENT: zero-terminated
+            if ((flags & bit) == 0) continue;
+            while (p < gz.length && gz[(int) p] != 0) p++;
+            p++;
+        }
+        if ((flags & 2) != 0) p += 2; // FHCRC
+        if (p > gz.length - 8) throw new SnapshotException(NOT_A_BACKUP);
+        return (int) p;
+    }
+
+    private static int le32(byte[] b, int i) {
+        return (b[i] & 0xff) | (b[i + 1] & 0xff) << 8 | (b[i + 2] & 0xff) << 16 | (b[i + 3] & 0xff) << 24;
     }
 
     /** Every byte of {@code in}, failing as soon as more than {@code max} arrive. */
