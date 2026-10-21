@@ -28,7 +28,7 @@ TOE3 Stormline is an Android reverse-engineering project that turns Truckers of 
 
 The menu runs inside the game's activity. **No root or “display over other apps” permission required.** The packaged `libil2cpp.so` stays unchanged; the mod applies its hooks and patches in memory.
 
-> **Compatibility:** reviewed for game **0.7.64 / build 193**, `arm64-v8a`. Unknown native code fails the build rather than receiving guessed patches. Google Play Games login and cloud saves do not work with the re-signed APK, including through microG.
+> **Compatibility:** reviewed for game **0.7.64 / build 193**, `arm64-v8a`. Unknown native code fails the build rather than receiving guessed patches. Google Play Games login and cloud saves do not work with the re-signed APK, including through microG; the game's **Save** and **Load** buttons use the mod's [backups](#backups) instead.
 
 ## Demo
 
@@ -67,13 +67,25 @@ Real captures from an **arm64 Huawei tablet running Android 12**, game **0.7.64*
 | Jobs | Remove delivery penalties; income and XP multipliers up to 20×; rewarded-ad actions without the ad |
 | Shopping & travel | Free trucks, parts, interiors, trailers and garages; free ferry, tolls and towing |
 
-The panel separates **Home**, **World**, **Updates** and **Debug** into focused screens. Open one mod category from Home instead of scrolling through every control. Each numeric control has a slider and exact value entry; weather uses a compact choice grid. Collapse the panel back to its draggable button to keep driving. Settings persist between launches, and the **Mods** master switch disables gameplay changes without blocking Updates or the read-only Debug viewer.
+The panel separates **Home**, **World**, **Cloud**, **Updates** and **Debug** into focused screens. Open one mod category from Home instead of scrolling through every control. Each numeric control has a slider and exact value entry; weather uses a compact choice grid. Collapse the panel back to its draggable button to keep driving. Settings persist between launches, and the **Mods** master switch disables gameplay changes without blocking backups, Updates or the read-only Debug viewer.
 
 Money, gold, wash tickets, level, rain and rain-dirt prevention are enabled by default. Other controls start disabled. Changes follow the game's update ticks or screen refreshes; disabling a control does not undo purchases, rewards or saved progress.
 
 World shows the requested weather beside the actual game state, transition, rain intensity and suppression flags. Debug groups cached observations into **Runtime**, **Weather** and **Truck**: hook and patch failures, sample age, speed, fuel, health, dirt and rain state. Unavailable or stale data is labelled rather than displayed as a valid zero. Sampling runs only while a relevant screen is visible.
 
 Weather changes are accepted on the next sky update, but visual changes still follow the game's fade, ramp and AfterRain drying stages. They can take minutes: the tablet smoke run changed Foggy → Clear → Rainy with one selection and no repeated toggles. World and Debug distinguish an accepted request from the finished weather.
+
+## Backups
+
+Google Play Games cloud saves cannot sign in to the re-signed APK, so the mod keeps compressed copies of the whole game save on the device instead, in `Download/TOE3Stormline/backups`:
+
+- **Cloud → Back up now**, or the game's own **Save** button, writes `toe3-YYYYMMDD-HHMMSS-manual.json.gz`. The game saves first, so the backup includes the last moments of play.
+- Leaving the game writes an automatic backup at most every 10 minutes. The 5 newest automatic backups are kept; the mod never deletes manual or pre-restore backups.
+- **Restore a backup**, or the game's **Load** button, lists the backups this install wrote. **Restore from a file** opens any backup through Android's file picker, for example one copied from another device or an earlier install.
+- Before restoring, the mod shows when, on which device and with which game build the backup was made. It then backs up the current save (`…-prerestore.json.gz`), writes the backup and restarts the game.
+- Backups from a newer game build are refused; backups from an older build restore after a warning.
+
+Backups work with **Mods** off and hold the game's progress, not the mod's own settings. Android 10 and later need no permission. On Android 6–9 the Cloud tab asks for storage access; without it, backups stay in the game's private folder, which Android deletes with the game. Copy important backups off the device, or to a second device, as well.
 
 ## How it works
 
