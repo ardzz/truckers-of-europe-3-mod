@@ -6,12 +6,14 @@ on:
   paths:
    - "ci/**"
    - "work/mod/**"
+   - "tests/**"
    - "assets/artwork/launcher-icon.png"
    - ".github/workflows/mod-release.yml"
  pull_request:
   paths:
    - "ci/**"
    - "work/mod/**"
+   - "tests/**"
    - "assets/artwork/launcher-icon.png"
    - ".github/workflows/mod-release.yml"
  schedule:
